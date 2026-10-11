@@ -637,3 +637,32 @@ test("a later physical start captures its larger input estimate before deferred 
   f.tracker.settle(undefined);
   expect(f.ledger.snapshot("pool", "P")?.unresolved).toBe(100);
 });
+
+test("unused prepaid seed re-admits a negotiated larger ceiling before permit use", () => {
+  const f = fixture();
+  f.budget.setSpendOutputCeiling?.(512);
+  const decision = f.budget.reserveDispatch({ sendClass: "initial", targetKey: "P/A", countedExternally: true });
+  expect(decision.allowed).toBe(true);
+  if (!decision.allowed) throw new Error("initial refused");
+  expect(f.ledger.snapshot("pool", "P")?.reserved).toBe(522);
+  f.budget.setSpendOutputCeiling?.(4096);
+  expect(decision.permit.assumeCharge()).toBe(true);
+  expect(f.ledger.snapshot("pool", "P")?.reserved).toBe(4106);
+  f.tracker.settle(undefined);
+  expect(f.ledger.snapshot("pool", "P")?.unresolved).toBe(4106);
+});
+
+test("a negotiated floor above capacity cannot consume its smaller prepaid permit", () => {
+  const f = fixture();
+  f.budget.setSpendOutputCeiling?.(512);
+  const decision = f.budget.reserveDispatch({ sendClass: "initial", targetKey: "P/A", countedExternally: true });
+  expect(decision.allowed).toBe(true);
+  if (!decision.allowed) throw new Error("initial refused");
+  f.budget.setSpendOutputCeiling?.(12000);
+  expect(decision.permit.assumeCharge()).toBe(false);
+  expect(f.tracker.refusals).toBe(1);
+  expect((f.ledger.snapshot("pool", "P")?.reserved ?? 0)).toBe(0);
+  decision.permit.release();
+  f.tracker.settle(undefined);
+  expect((f.ledger.snapshot("pool", "P")?.unresolved ?? 0)).toBe(0);
+});

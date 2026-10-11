@@ -439,3 +439,5 @@ Generic refetches record metadata inside each admitted retry callback, retaining
 transient recovery reason when present and otherwise the outer recovery reason.
 
 The optional Chat output floor is published to the owning observer before native/translated admission and combo prepayment, including negotiated adapter rebuilds. Derived scopes and dispatch views forward the same setter; each physical start snapshots its current input/output estimate so delayed reports cannot adopt a later sibling's ceiling. `tests/responses/chat-native-spend.test.ts` and `tests/responses/responses-spend-anchor.test.ts` cover target admission and delayed-report ownership.
+
+A prepayment with no physical start is re-admitted at normal capacity when final wire selection changes its input/output estimate. The exact owning permit remains single-use; a retired proof cannot bypass the new reservation. Started seeds and their prior liabilities remain owned.

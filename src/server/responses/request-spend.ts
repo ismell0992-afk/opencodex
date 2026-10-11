@@ -79,7 +79,7 @@ export function createRequestSpendTracker(
   let finalRequested = false;
   let finalUsage: TerminalSpendUsage | undefined;
   let reporters = 0;
-  const seeds = new Map<string, { seed: SpendSeed; started: boolean; reported: boolean }>();
+  const seeds = new Map<string, { seed: SpendSeed; started: boolean; reported: boolean; estimate: { inputTokens: number; outputCeilingTokens: number } }>();
   // Abandoned capabilities retain cleanup ownership, never admission lookup.
   const retiredSeeds = new Set<SpendSeed>();
   const resolvedSendIds = new Set<string>();
@@ -231,14 +231,23 @@ export function createRequestSpendTracker(
       if (!applicable(scopes)) return undefined;
       const key = JSON.stringify([scopes.rootId, scopes.identityId, scopes.poolId, target.targetKey]);
       const existing = seeds.get(key);
-      if (existing) return existing.seed;
+      if (existing) {
+        const current = estimates();
+        if (existing.started || existing.estimate.inputTokens === current.inputTokens && existing.estimate.outputCeilingTokens === current.outputCeilingTokens) return existing.seed;
+        // A negotiated adapter can raise the ceiling after combo prepayment, before use.
+        // Retire the unused booking and require normal capacity again; its proof buys no bypass.
+        if (!retireSeed(key, existing.seed)) return undefined;
+      }
       if (prepaidProof?.ledger === ledger()) {
         const prepaid = [...seeds.entries()].find(([, state]) => state.seed.sendId === prepaidProof.sendId);
         if (prepaid && !prepaid[1].started) {
           // The proof was reserved against the selected scopes by this tracker.
           const oldIdentity = JSON.parse(prepaid[0]) as Array<string | undefined>;
           if (oldIdentity[0] === (scopes.rootId ?? null) && oldIdentity[1] === (scopes.identityId ?? null) && oldIdentity[2] === (scopes.poolId ?? null)) {
-            seeds.delete(prepaid[0]); seeds.set(key, prepaid[1]); return prepaid[1].seed;
+            const current = estimates();
+            if (prepaid[1].estimate.inputTokens === current.inputTokens && prepaid[1].estimate.outputCeilingTokens === current.outputCeilingTokens) {
+              seeds.delete(prepaid[0]); seeds.set(key, prepaid[1]); return prepaid[1].seed;
+            }
           }
         }
       }
@@ -247,7 +256,10 @@ export function createRequestSpendTracker(
           const identity = JSON.parse(candidate) as Array<string | undefined>;
           return identity[0] === (scopes.rootId ?? null) && identity[1] === (scopes.identityId ?? null) && identity[2] === (scopes.poolId ?? null);
         });
-        if (same) return same[1].seed;
+        if (same) {
+          const current = estimates();
+          if (same[1].started || same[1].estimate.inputTokens === current.inputTokens && same[1].estimate.outputCeilingTokens === current.outputCeilingTokens) return same[1].seed;
+        }
       }
       // Rebind an unused provisional anchor before selection changes. Dispatched anchors stay live.
       for (const [oldKey, state] of seeds) if (!state.started) {
@@ -256,14 +268,15 @@ export function createRequestSpendTracker(
       // Exact prepaid proofs originate from this tracker and are found above; foreign receipts
       // cannot enroll arbitrary scopes. Normal reservation remains the only initial admission.
       if (prepaidProof && prepaidProof.ledger !== ledger()) return undefined;
-      const decision = ledger().reserveSeed({ sendId: randomUUID(), scopes, ...estimates(), admissionPolicy }, tracker);
+      const estimate = estimates();
+      const decision = ledger().reserveSeed({ sendId: randomUUID(), scopes, ...estimate, admissionPolicy }, tracker);
       if (!decision.reserved) {
         // Use the established denial mapping without making another reservation.
         refusal(decision.denial);
         return undefined;
       }
       seededAccounting = true;
-      seeds.set(key, { seed: decision.seed, started: false, reported: false });
+      seeds.set(key, { seed: decision.seed, started: false, reported: false, estimate });
       return decision.seed;
     },
     beginReporter() {

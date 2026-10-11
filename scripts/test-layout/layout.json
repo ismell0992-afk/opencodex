@@ -334,7 +334,7 @@
     "chat-media-translation.test.ts": "responses",
     "chat-native-developer-role.test.ts": "responses",
     "chat-native-image-normalization.test.ts": "responses",
-    "chat-native-spend.test.ts": "responses",
+    "chat-native-spend.test.ts": "responses", "chat-output-floor-copilot-auto.test.ts": "responses",
     "chat-refusal-scope.test.ts": "responses",
     "chat-refusal.test.ts": "responses",
     "chat-responses-control-integration.test.ts": "responses",
