@@ -2,8 +2,12 @@ import { modelRecordValue } from "../../reasoning-effort";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../types";
 
 export function resolveMaxTokens(provider: OcxProviderConfig, parsed: OcxParsedRequest): number | undefined {
-  const declared = parsed.options.maxOutputTokens
-    ?? modelRecordValue(provider.modelMaxOutputTokens, parsed.modelId)
+  return resolveChatMaxTokens(provider, parsed.modelId, parsed.options.maxOutputTokens);
+}
+
+export function resolveChatMaxTokens(provider: OcxProviderConfig, modelId: string, requested?: number): number | undefined {
+  const declared = requested
+    ?? modelRecordValue(provider.modelMaxOutputTokens, modelId)
     ?? provider.defaultMaxOutputTokens;
   if (typeof provider.minMaxOutputTokens === "number" && provider.minMaxOutputTokens > 0) {
     return declared === undefined

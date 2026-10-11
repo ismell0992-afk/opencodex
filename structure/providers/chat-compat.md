@@ -9,6 +9,9 @@ Native Codex Spark-specific request exceptions are absent. General Lite and name
 remain shared [Responses compatibility](../transports/responses.md#responses-httpsse), including
 other providers whose models happen to share a name fragment.
 
+OpenAI Chat translated and native serializers share the opt-in [output-budget floor](../data-planes/inbound-compat.md#output-budget-floor).
+Native completion-token alias precedence applies on streaming and buffered delivery; other adapters retain their own budget resolution.
+
 ## Chronological in-conversation instructions
 
 `src/adapters/openai-chat/messages.ts` keeps text-only timeline developer messages in their

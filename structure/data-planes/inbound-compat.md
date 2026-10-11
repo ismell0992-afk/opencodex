@@ -143,6 +143,19 @@ unclassified. The two Chat builders share the explicit wire policy after provide
 tool-bearing model omits reasoning effort on both paths. With neither declaration, native raw
 reasoning forwarding stays unchanged. This guard does not alter the separate raw service-tier contract.
 
+### Output budget floor
+
+`OcxProviderConfig.minMaxOutputTokens` is an optional positive integer floor for `openai-chat`,
+including translated Responses and native Chat streaming, JSON and buffered SSE delivery.
+`src/adapters/openai-chat/summary-budget.ts` resolves caller budget, then model default, then
+provider default, and raises only values below the floor; without any budget it sends the floor.
+`src/server/chat-native.ts` rebuilds every active request through
+`src/adapters/openai-chat/passthrough.ts`, which uses `max_completion_tokens` before `max_tokens`
+and omits the legacy key when the modern key wins, without mutating the raw caller body.
+Configured defaults apply on native Chat only while this floor is enabled. Unset preserves both
+caller aliases and omitted budgets unchanged. Other adapters retain their own budget resolution.
+`tests/adapters/openai/openai-chat-min-max-output-tokens.test.ts` covers each native delivery shape.
+
 On the response side, the upstream `service_tier` echo (xAI Priority Processing, OpenAI fast
 tier) relays to the Chat Completions caller on every delivery shape: the non-streaming body
 (`responsesJsonToChatCompletion` in `src/chat/outbound.ts`), the folded stream

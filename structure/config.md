@@ -392,7 +392,7 @@ not context-window metadata. They are applied only when a Responses request omit
 `max_output_tokens`; an explicit request value wins, then a model-specific configured value, then
 the provider default, then the adapter omits `max_tokens`.
 
-Both fields must stay positive finite integers at disk-config and management validation boundaries.
+Both defaults and optional `minMaxOutputTokens` must be positive finite integers at disk-config and management validation boundaries. The floor is a non-secret numeric editor field; when enabled it also applies defaults on native Chat. See the [output-budget floor](data-planes/inbound-compat.md#output-budget-floor) for effective caller precedence and opt-in scope.
 Registry entries may seed them through `providerConfigSeed`, key-login derivation, OAuth reconcile,
 and `routeModel`, but user config overrides registry defaults per field/key.
 

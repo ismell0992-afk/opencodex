@@ -11,7 +11,7 @@ import { configRebaseDeletionKeys, projectConfigRebaseProvenance } from "../../s
 import * as destinationPolicy from "../../src/lib/destination-policy";
 import { providerConfigSeed } from "../../src/providers/derive";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
-import { providerEditorConfigDTO, providerManagementConfigError, safeConfigDTO } from "../../src/server/auth-cors";
+import { parseProviderEditorConfigDTO, providerEditorConfigDTO, providerManagementConfigError, safeConfigDTO } from "../../src/server/auth-cors";
 import { handleAgentSettingsRoutes } from "../../src/server/management/agent-settings-routes";
 import { handleProviderRoutes } from "../../src/server/management/provider-routes";
 import type { ManagementContext } from "../../src/server/management/context";
@@ -158,8 +158,11 @@ describe("reasoning pin config boundaries", () => {
   });
 
   test("minMaxOutputTokens is validated at the management boundary like its budget siblings", () => {
-    const provider = { adapter: "openai-chat", baseUrl: "https://example.test/v1", minMaxOutputTokens: 4096 };
+    const provider = { adapter: "openai-chat" as const, baseUrl: "https://example.test/v1", minMaxOutputTokens: 4096 };
     expect(providerManagementConfigError("custom", provider)).toBeNull();
+    const editor = providerEditorConfigDTO({ ...getDefaultConfig(), providers: { custom: provider } });
+    expect(editor.providers.custom.minMaxOutputTokens).toBe(4096);
+    expect(parseProviderEditorConfigDTO(editor).ok).toBe(true);
     for (const bad of [0, -1, 1.5, "4096", Number.POSITIVE_INFINITY]) {
       expect(providerManagementConfigError("custom", { ...provider, minMaxOutputTokens: bad })).not.toBeNull();
     }

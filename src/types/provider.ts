@@ -642,11 +642,12 @@ export interface OcxProviderConfig {
   /** Model-specific fallback output token budgets. Exact/model-pattern entries beat the provider default. */
   modelMaxOutputTokens?: Record<string, number>;
   /**
-   * Hard floor on the output token budget. The effective `max_tokens` sent to the upstream
+   * Opt-in floor on translated and native OpenAI Chat output budgets. The budget sent upstream
    * is `max(declared, minMaxOutputTokens)`; when nothing is declared, the floor itself is
    * sent. Guards against callers that send a tiny budget which, for reasoning-heavy models,
    * leaves zero tokens for actual content. Unlike the omit-only fallbacks above, this can
-   * raise a caller-declared budget. Honored by the `openai-chat` adapter only.
+   * raise a caller-declared budget. Native max_completion_tokens wins over max_tokens;
+   * the legacy key is omitted when the modern key wins. Other adapters are unchanged.
    */
   minMaxOutputTokens?: number;
   /**
