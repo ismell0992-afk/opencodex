@@ -6,15 +6,25 @@ export function resolveMaxTokens(provider: OcxProviderConfig, parsed: OcxParsedR
 }
 
 export function resolveChatMaxTokens(provider: OcxProviderConfig, modelId: string, requested?: number): number | undefined {
-  const declared = requested
-    ?? modelRecordValue(provider.modelMaxOutputTokens, modelId)
-    ?? provider.defaultMaxOutputTokens;
+  const declared = resolveDeclaredChatMaxTokens(provider, modelId, requested);
   if (typeof provider.minMaxOutputTokens === "number" && provider.minMaxOutputTokens > 0) {
     return declared === undefined
       ? provider.minMaxOutputTokens
       : Math.max(declared, provider.minMaxOutputTokens);
   }
   return declared;
+}
+
+export function resolveDeclaredChatMaxTokens(provider: OcxProviderConfig, modelId: string, requested?: number): number | undefined {
+  return requested ?? modelRecordValue(provider.modelMaxOutputTokens, modelId) ?? provider.defaultMaxOutputTokens;
+}
+
+export function applyChatOutputTokenFloor(body: Record<string, unknown>, provider: OcxProviderConfig, modelId: string): void {
+  if (typeof provider.minMaxOutputTokens !== "number" || provider.minMaxOutputTokens <= 0) return;
+  const modern = typeof body.max_completion_tokens === "number";
+  const field = modern ? "max_completion_tokens" : "max_tokens";
+  body[field] = resolveChatMaxTokens(provider, modelId, typeof body[field] === "number" ? body[field] as number : undefined);
+  if (modern) delete body.max_tokens;
 }
 
 function textContent(value: unknown): string | undefined {

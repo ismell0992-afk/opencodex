@@ -1,3 +1,4 @@
+import { recordChatOutputSpendCeiling } from "../chat-output-budget";
 import type { ResponsesRequestContext, ResponsesAdmissionState, ResponsesDispatchers } from "./core-options";
 import { capturePolicyRequestRoute, assertPolicyNormalizedRoute, recordPolicyPreparedDestination, policyCandidateRefusalResponse } from "./policy-request-scope";
 import {
@@ -1440,6 +1441,9 @@ export async function prepareResponsesRequest(
       });
     }
   }
+  recordChatOutputSpendCeiling(logCtx,
+    resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
+    route.modelId, parsed.options.maxOutputTokens);
   // Seed an account-derived scope before final adapter binding. Cursor never treats it as
   // authoritative: bindRouteReasoningReplayScope replaces it with the exact route owner or a
   // per-request fail-closed sentinel after the final provider and credential are known.

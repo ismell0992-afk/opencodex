@@ -437,3 +437,5 @@ The actual dispatch commits their count and recovery label once; unsent pending 
 is discarded on process exit and is not usage evidence. See [key attribution](../dashboard-and-usage.md#upstream-key-account-attribution).
 Generic refetches record metadata inside each admitted retry callback, retaining the
 transient recovery reason when present and otherwise the outer recovery reason.
+
+The optional Chat output floor is published to the owning observer before native/translated admission and combo prepayment, including negotiated adapter rebuilds. Derived scopes and dispatch views forward the same setter; each admitted seed freezes its input/output estimate so delayed reports cannot adopt a later sibling's ceiling. `tests/responses/chat-native-spend.test.ts` and `tests/responses/responses-spend-anchor.test.ts` cover target admission and delayed-report ownership.

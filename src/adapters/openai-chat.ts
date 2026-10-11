@@ -1,5 +1,5 @@
 import { hasShrinkableOpenAIChatImages, normalizeOpenAIChatImages } from "./openai-chat-images";
-import { protectGlmSummaryBudget, resolveMaxTokens } from "./openai-chat/summary-budget";
+import { applyChatOutputTokenFloor, protectGlmSummaryBudget, resolveDeclaredChatMaxTokens } from "./openai-chat/summary-budget";
 import { chatParallelToolCallsWireValue } from "./openai-chat/parallel-tool-calls";
 import { applyExplicitChatReasoningWirePolicy } from "./openai-chat/reasoning-wire";
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "./base";
@@ -124,7 +124,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           body.service_tier = serviceTier;
         }
         if (modelInList(provider.reasoningSplitModels, parsed.modelId)) body.reasoning_split = true;
-        const maxTokens = resolveMaxTokens(provider, parsed);
+        const maxTokens = resolveDeclaredChatMaxTokens(provider, parsed.modelId, parsed.options.maxOutputTokens);
         const openRouterRouting = resolveOpenRouterRouting(provider, parsed.modelId);
         if (openRouterRouting) body.provider = openRouterProviderPayload(openRouterRouting);
         const vercelRouting = resolveVercelGatewayRouting(provider, parsed.modelId);
@@ -148,6 +148,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         const reasoningDisabled = modelInList(provider.noReasoningModels, parsed.modelId);
         const requestedEffort = protectGlmSummaryBudget(body, provider.baseUrl, parsed.options.reasoning)
           ? "low" : parsed.options.reasoning;
+        applyChatOutputTokenFloor(body, provider, parsed.modelId);
         const reasoningEffort = mapReasoningEffort(provider, parsed.modelId, requestedEffort);
         const explicitReasoning = applyExplicitChatReasoningWirePolicy({
           provider,
@@ -163,7 +164,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           reasoningLog = explicitReasoning.reasoningLog;
         } else if (reasoningEffort !== undefined) {
           if (modelInList(provider.thinkingBudgetModels, parsed.modelId)) {
-            const budget = thinkingBudgetForEffort(parsed, reasoningEffort, maxTokens);
+            const budget = thinkingBudgetForEffort(parsed, reasoningEffort, typeof body.max_tokens === "number" ? body.max_tokens : undefined);
             if (budget !== undefined) {
               body.thinking_budget = budget;
               reasoningLog = {

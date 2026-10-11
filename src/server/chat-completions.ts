@@ -5,7 +5,7 @@
  * Ordinary openai-chat routes send directly on the Chat Completions wire. Routes
  * that need Responses-only behavior keep the Chat -> Responses -> Chat bridge.
  */
-import { resolveChatMaxTokens } from "../adapters/openai-chat/summary-budget";
+import { recordChatOutputSpendCeiling } from "./chat-output-budget";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import {
   assertChatCompletionsRoutingBody,
@@ -238,13 +238,7 @@ async function handleChatCompletionsWithBudget(
         if (chatBody.tools !== undefined) parts.push(JSON.stringify(chatBody.tools));
         logCtx.spendInputEstimateTokens = Math.max(1, estimateTokens(parts.join("\n"), requestedModel));
       }
-      const callerCeiling = chatBody.max_completion_tokens ?? chatBody.max_tokens;
-      const outputCeiling = typeof route.provider.minMaxOutputTokens === "number" && route.provider.minMaxOutputTokens > 0
-        ? resolveChatMaxTokens(route.provider, route.modelId, typeof callerCeiling === "number" ? callerCeiling : undefined)
-        : callerCeiling;
-      if (typeof outputCeiling === "number" && outputCeiling > 0) {
-        logCtx.spendOutputCeilingTokens = Math.trunc(outputCeiling);
-      }
+      recordChatOutputSpendCeiling(logCtx, route.provider, route.modelId, chatBody.max_completion_tokens ?? chatBody.max_tokens);
     }
   } catch (err) {
     if (err instanceof AnthropicSecondaryInstanceUnavailableError) {

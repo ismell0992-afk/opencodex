@@ -142,3 +142,16 @@ describe("GLM summary mitigation stays inside its boundary (#5953 review)", () =
     expect(mixedSmall.max_completion_tokens).toBe(8192);
   });
 });
+
+describe("output floor preserves GLM checkpoint protection", () => {
+  for (const floor of [1024, 4096, 12288]) {
+    for (const cap of [{ max_tokens: 512 }, { max_completion_tokens: 512 }]) {
+      test(`floor ${floor}, ${JSON.stringify(cap)} retains protected cap and effort`, () => {
+        for (const body of bodies(cap, { ...provider, minMaxOutputTokens: floor })) {
+          expect(body.max_completion_tokens ?? body.max_tokens).toBe(Math.max(8192, floor));
+          expect(body.reasoning_effort).toBe("low");
+        }
+      });
+    }
+  }
+});

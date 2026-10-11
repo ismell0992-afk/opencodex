@@ -79,7 +79,7 @@ export function createRequestSpendTracker(
   let finalRequested = false;
   let finalUsage: TerminalSpendUsage | undefined;
   let reporters = 0;
-  const seeds = new Map<string, { seed: SpendSeed; started: boolean; reported: boolean }>();
+  const seeds = new Map<string, { seed: SpendSeed; started: boolean; reported: boolean; estimate: { inputTokens: number; outputCeilingTokens: number } }>();
   // Abandoned capabilities retain cleanup ownership, never admission lookup.
   const retiredSeeds = new Set<SpendSeed>();
   const resolvedSendIds = new Set<string>();
@@ -213,6 +213,7 @@ export function createRequestSpendTracker(
         return;
   };
   const tracker: RequestSpendTracker = {
+    setSpendOutputCeiling(tokens) { logCtx.spendOutputCeilingTokens = tokens; },
     startRequest(target) {
       if (admissionPolicy) return;
       const policy = ledgerRef?.policy ?? sharedSpendPolicy();
@@ -255,14 +256,15 @@ export function createRequestSpendTracker(
       // Exact prepaid proofs originate from this tracker and are found above; foreign receipts
       // cannot enroll arbitrary scopes. Normal reservation remains the only initial admission.
       if (prepaidProof && prepaidProof.ledger !== ledger()) return undefined;
-      const decision = ledger().reserveSeed({ sendId: randomUUID(), scopes, ...estimates(), admissionPolicy }, tracker);
+      const estimate = estimates();
+      const decision = ledger().reserveSeed({ sendId: randomUUID(), scopes, ...estimate, admissionPolicy }, tracker);
       if (!decision.reserved) {
         // Use the established denial mapping without making another reservation.
         refusal(decision.denial);
         return undefined;
       }
       seededAccounting = true;
-      seeds.set(key, { seed: decision.seed, started: false, reported: false });
+      seeds.set(key, { seed: decision.seed, started: false, reported: false, estimate });
       return decision.seed;
     },
     beginReporter() {
@@ -279,7 +281,7 @@ export function createRequestSpendTracker(
           const state = seedState(seed)!;
           state.started = true;
           starts.push({ seed, ordinal });
-          physical.set(ordinal, { seed });
+          physical.set(ordinal, { seed, estimate: seedState(seed)!.estimate });
 
         },
         rebindTarget(target, ordinal) {
@@ -293,7 +295,7 @@ export function createRequestSpendTracker(
           old.started = [...physical.values()].some(start => start.seed === old.seed);
           const seed = tracker.ensureSeed(target);
           if (!seed) { starts.splice(starts.indexOf(owned), 1); return false; }
-          physical.set(ordinal, { seed });
+          physical.set(ordinal, { seed, estimate: seedState(seed)!.estimate });
           owned.seed = seed;
           seedState(seed)!.started = true;
           return true;

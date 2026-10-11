@@ -1,3 +1,5 @@
+import { recordChatOutputSpendCeiling } from "../chat-output-budget";
+import { resolveWireProtocolOverride } from "../adapter-resolve";
 import type { CodexAccountModelRefusal } from "../../combos/failover";
 import {
   isCodexReasoningEffort,
@@ -715,6 +717,7 @@ export async function executeComboResponses(
   while (pick) {
     if (options.abortSignal?.aborted) return clientCancelledResponse();
     const firstComboTarget = comboTargetsDispatched === 0;
+    const initialJevDecision = firstComboTarget ? jevDecision : undefined;
     const targetRoute = routeConcreteModel(config, `${pick.target.provider}/${pick.target.model}`);
     // The inherited spend tracker observes this parent log, before the child has its own label.
     logCtx.spendPoolId = targetRoute.providerName;
@@ -722,6 +725,12 @@ export async function executeComboResponses(
     const targetSendBudget = comboSendScope
       ? comboTargetSendBudget(comboSendScope, combo.targets.length - 1 - comboTargetsDispatched)
       : options.sendBudget;
+    const nativeChild = protocolLanes?.nativeChild(pick.target, targetRoute, targetSendBudget, initialJevDecision);
+    recordChatOutputSpendCeiling(logCtx,
+      nativeChild?.route.provider ?? resolveWireProtocolOverride(targetRoute.providerName, targetRoute.modelId, targetRoute.provider, options.inboundWire ?? "responses"),
+      nativeChild?.route.modelId ?? targetRoute.modelId,
+      nativeChild ? nativeChild.body.max_completion_tokens ?? nativeChild.body.max_tokens : isPlainObject(body) ? body.max_output_tokens : undefined,
+      targetSendBudget);
     // Every target prepays one send. Only its child may consume that booking; later targets
     // remain bounded by the shared total, transition ledger and per-target holdback.
     // `countedExternally` is required: the child charges its own physical sends against this
@@ -755,7 +764,6 @@ export async function executeComboResponses(
       provider: targetRoute.provider,
       modelId: targetRoute.modelId,
     });
-    const initialJevDecision = firstComboTarget ? jevDecision : undefined;
     const childInput = options.droidDefaultEffort && isPlainObject(body) ? { ...body } : body;
     applyDroidResponsesReasoningDefault(childInput, options.droidDefaultEffort, {
       provider: targetRoute.provider,
@@ -863,7 +871,6 @@ export async function executeComboResponses(
           && targetEligible(target)
           && !isComboTargetInCooldown(comboId, target),
         );
-      const nativeChild = protocolLanes?.nativeChild(pick.target, targetRoute, targetSendBudget, initialJevDecision);
       response = nativeChild ? await dispatchNativeComboChild({
         source: options.protocolSource!,
         plan: nativeChild,

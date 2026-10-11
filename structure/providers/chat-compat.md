@@ -1,6 +1,6 @@
 # Chat Provider Compatibility
 
-Native steering follows [the shared WebSocket contract](../transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
+Chat output floors preserve GLM checkpoint protection by applying after its original-cap eligibility check; [output-budget admission](../data-planes/inbound-compat.md#output-budget-floor) also covers translated/native combo sends. Native steering follows [the shared WebSocket contract](../transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
 
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. Cursor's localized native-shell names follow the [routing-commentary guard contract](cursor.md#cursor-native-exec).

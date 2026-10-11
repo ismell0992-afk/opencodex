@@ -69,7 +69,7 @@ afterEach(async () => {
   if (testDir) removeTreeWithRetry(testDir);
 });
 
-function mockChatUpstreamCapturing() {
+function mockChatUpstreamCapturing(jsonBuffered = false) {
   const captured: Array<Record<string, unknown>> = [];
   const server = Bun.serve({
     port: 0,
@@ -79,6 +79,11 @@ function mockChatUpstreamCapturing() {
         return Response.json({ error: { message: `unexpected path ${url.pathname}` } }, { status: 404 });
       }
       try { captured.push(await req.json() as Record<string, unknown>); } catch { /* keep streaming */ }
+      if (jsonBuffered && captured.at(-1)?.stream !== true) return Response.json({
+        id: "chatcmpl_fixture", object: "chat.completion", model: "test-model",
+        choices: [{ index: 0, message: { role: "assistant", content: "Hello" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 12, completion_tokens: 3 },
+      });
       const frames = [
         `data: ${JSON.stringify({ choices: [{ index: 0, delta: { role: "assistant", content: "Hello" } }] })}\n\n`,
         `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: " from mock" } }] })}\n\n`,
@@ -541,3 +546,29 @@ test("native Chat without the floor retains caller-budget spend admission", asyn
   await response.text();
   expect(upstream.captured[0]?.max_tokens).toBe(512);
 });
+
+for (const stream of [false, true]) {
+  for (const lane of ["responses", "chat bridge", "native combo"] as const) {
+    for (const floor of [4096, undefined]) test(`Chat output floor ${floor} reserves before ${lane} ${stream ? "stream" : "buffered"} admission`, async () => {
+      const upstream = mockChatUpstreamCapturing(true);
+      const config = mockConfig(`${upstream.server.url.toString().replace(/\/$/, "")}/v1`, { minMaxOutputTokens: floor });
+      config.spend = { pool: { maxTokens: 1000 } };
+      if (lane === "native combo") {
+        config.combos = { pair: { strategy: "failover", targets: [{ provider: "mock", model: "test-model" }] } };
+        config.protocols = { rollout: { nativeChatCombos: true } };
+      }
+      saveConfig(config);
+      activeServer = startServer(0);
+      const response = await fetch(new URL(lane === "responses" ? "/v1/responses" : "/v1/chat/completions", activeServer.url), {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify(lane === "responses"
+          ? { model: "mock/test-model", input: "hello", max_output_tokens: 512, stream }
+          : { model: lane === "native combo" ? "combo/pair" : "mock/test-model", messages: [{ role: "user", content: "hello" }], max_tokens: 512, stream, ...(lane === "chat bridge" ? { store: true } : {}) }),
+      });
+      expect(response.status).toBe(floor === undefined ? 200 : 429);
+      await response.text();
+      if (floor === undefined) expect(upstream.captured[0]?.max_tokens).toBe(512);
+      else expect(upstream.captured).toHaveLength(0);
+    });
+  }
+}

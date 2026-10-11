@@ -1,4 +1,4 @@
-import { protectGlmSummaryBudget, resolveChatMaxTokens } from "./summary-budget";
+import { applyChatOutputTokenFloor, protectGlmSummaryBudget } from "./summary-budget";
 import { openAIChatTransport, stripBracketedModelSuffix } from "./wire";
 import type { AdapterRequest } from "../base";
 import { frameAgentRouterMessages } from "../agentrouter";
@@ -75,15 +75,9 @@ export function buildOpenAIChatPassthroughRequest(
   for (const field of CHAT_PASSTHROUGH_FIELDS) {
     if (rawBody[field] !== undefined) body[field] = rawBody[field];
   }
-  if (typeof provider.minMaxOutputTokens === "number" && provider.minMaxOutputTokens > 0) {
-    // Match Chat ingress precedence; a conflicting legacy cap must not bypass the floor.
-    const modern = typeof body.max_completion_tokens === "number";
-    const field = modern ? "max_completion_tokens" : "max_tokens";
-    const requested = typeof body[field] === "number" ? body[field] as number : undefined;
-    body[field] = resolveChatMaxTokens(provider, modelId, requested);
-    if (modern) delete body.max_tokens;
-  }
+  // Checkpoint protection sees the caller cap before the optional floor can mask it.
   if (protectGlmSummaryBudget(body, provider.baseUrl, body.reasoning_effort)) body.reasoning_effort = "low";
+  applyChatOutputTokenFloor(body, provider, modelId);
   const rawEfforts = modelRecordValue(provider.modelReasoningEfforts, modelId) ?? provider.reasoningEfforts;
   const reasoningDisabled = modelInList(provider.noReasoningModels, modelId) || rawEfforts?.length === 0;
   if (reasoningDisabled) {

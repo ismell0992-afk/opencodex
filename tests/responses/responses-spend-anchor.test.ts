@@ -599,3 +599,27 @@ test("server stop waits for a native Messages transport reporter after listener 
     lifecycle.release();
   }
 }));
+
+test("derived budget publishes the target ceiling to the owning tracker before booking", () => {
+  const f = fixture();
+  const derived = deriveRequestExecutionBudget(f.budget, { ...CODEX_TEXT_GUARDED_BUDGET_POLICY });
+  derived.setSpendOutputCeiling?.(4096);
+  expect(f.ctx.spendOutputCeilingTokens).toBe(4096);
+  const decision = derived.reserveDispatch({ sendClass: "initial", targetKey: "P/A", countedExternally: true });
+  expect(decision.allowed).toBe(true);
+  expect(f.ledger.snapshot("pool", "P")?.reserved).toBe(4106);
+  if (decision.allowed) decision.permit.release();
+  f.tracker.settle(undefined);
+});
+
+test("deferred retry reports retain the admitted seed estimate after a sibling changes the ceiling", () => {
+  const f = fixture();
+  const report = f.reporter();
+  expect(report.beforeSend?.()).toBe(true);
+  expect(report.beforeSend?.()).toBe(true);
+  f.budget.setSpendOutputCeiling?.(4096);
+  report(2);
+  report.close?.();
+  f.tracker.settle(undefined);
+  expect(f.ledger.snapshot("pool", "P")?.unresolved).toBe(60);
+});

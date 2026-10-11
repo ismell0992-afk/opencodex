@@ -396,6 +396,7 @@ function adapterDispatchBudgetView(
     startRequest: target => budget.startRequest?.(target),
     claimPhysicalSend: () => budget.claimPhysicalSend?.(),
     beginSpendProducer: () => budget.beginSpendProducer?.(),
+    setSpendOutputCeiling: tokens => budget.setSpendOutputCeiling?.(tokens),
     get used(): number { return budget.used; },
     set used(next: number) { budget.used = next; },
     logicalRequestId: budget.logicalRequestId,

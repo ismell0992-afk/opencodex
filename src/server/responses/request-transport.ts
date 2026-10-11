@@ -1,3 +1,4 @@
+import { recordChatOutputSpendCeiling } from "../chat-output-budget";
 import { SendBudgetExhaustedError } from "../../lib/upstream-retry";
 import { rebindPhysicalSend } from "../../lib/request-execution-budget";
 import { anthropicModelQuotaFor } from "../../oauth/anthropic-model-quota";
@@ -549,6 +550,7 @@ export async function prepareResponsesTransport(
     }
     const build = resolved.buildRequest.bind(resolved);
     resolved.buildRequest = async (requestParsed, incoming) => {
+      recordChatOutputSpendCeiling(logCtx, provider, requestParsed.modelId, requestParsed.options.maxOutputTokens, options.sendBudget);
       const request = await build(requestParsed, incoming);
       // Capture at adapter creation, never from mutable serving state after an await.
       if (binding) requestBindings.set(request, binding);
@@ -993,6 +995,7 @@ export async function prepareResponsesTransport(
   }
   let adapterProvider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy);
   if (copilotAutoAdapter) adapterProvider = { ...adapterProvider, adapter: copilotAutoAdapter };
+  recordChatOutputSpendCeiling(logCtx, adapterProvider, route.modelId, parsed.options.maxOutputTokens, options.sendBudget);
   const stripClaudeMainAuth = options.stripClaudeMainAuthForNoncanonicalForward === true
     && !isCanonicalOpenAiForwardProvider(adapterProvider)
     && ((adapterProvider.adapter === "openai-responses" && adapterProvider.authMode === "forward")

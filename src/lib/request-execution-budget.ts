@@ -155,6 +155,7 @@ export interface RequestSendObserver {
   readonly policyStarted?: boolean;
   readonly spendAdmissionPolicy?: SpendAdmissionPolicy;
   /** Capture request policy at its first admission or actual physical start. */
+  setSpendOutputCeiling?(tokens: number | undefined): void;
   startRequest?(target?: SpendScopes & { targetKey?: string }): void;
   ensureSeed?(target: SpendScopes & { targetKey?: string }, proof?: SpendReservationProof): SpendSeed | undefined;
   beginReporter?(): { start(seed: SpendSeed, ordinal: number): void; rebindTarget(target: SpendScopes & { targetKey?: string }, ordinal: number): boolean; report(sends: number): void; close(): void };
@@ -174,6 +175,7 @@ export interface RequestExecutionBudget extends TransientSendBudget {
   readonly spendEnforced?: boolean;
   readonly spendPolicyStarted?: boolean;
   readonly spendAdmissionPolicy?: SpendAdmissionPolicy;
+  setSpendOutputCeiling?(tokens: number | undefined): void;
   startRequest?(target?: SpendScopes & { targetKey?: string }): void;
   claimPhysicalSend?(): number | undefined;
   beginSpendProducer?(): { close(): void } | undefined;
@@ -417,6 +419,7 @@ function createRequestExecutionBudgetWithLedger(
         counter.physicalLimit = Number.isSafeInteger(policy.maxTotalModelSends) && policy.maxTotalModelSends > 0 ? policy.maxTotalModelSends : 0;
       }
     },
+    setSpendOutputCeiling(tokens) { observer?.setSpendOutputCeiling?.(tokens); },
     beginSpendProducer() { return observer?.enforced ? observer.beginReporter?.() : undefined; },
     claimPhysicalSend(): number | undefined {
       budget.startRequest?.();
