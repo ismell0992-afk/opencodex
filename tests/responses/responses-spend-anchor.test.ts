@@ -623,3 +623,17 @@ test("deferred retry reports retain the admitted seed estimate after a sibling c
   f.tracker.settle(undefined);
   expect(f.ledger.snapshot("pool", "P")?.unresolved).toBe(60);
 });
+
+
+test("a later physical start captures its larger input estimate before deferred reporting", () => {
+  const f = fixture();
+  const report = f.reporter();
+  expect(report.beforeSend?.()).toBe(true);
+  f.ctx.spendInputEstimateTokens = 50;
+  expect(report.beforeSend?.()).toBe(true);
+  f.ctx.spendInputEstimateTokens = 500;
+  report(2);
+  report.close?.();
+  f.tracker.settle(undefined);
+  expect(f.ledger.snapshot("pool", "P")?.unresolved).toBe(100);
+});
