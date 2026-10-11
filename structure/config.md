@@ -397,7 +397,7 @@ Registry entries may seed them through `providerConfigSeed`, key-login derivatio
 and `routeModel`, but user config overrides registry defaults per field/key.
 
 `src/providers/resolved-model-policy.ts` is the detached static-policy authority for this merge
-contract. It preserves each field's existing rule rather than assigning one global priority:
+contract. It captures operator-only `minMaxOutputTokens` with scalar provenance and preserves each field's existing rule rather than assigning one global priority:
 operator scalars and explicit booleans fill over registry defaults, per-model maps fill per key with a case-varied operator key claiming the registry row,
 restriction lists form a stable union, and hard wire pins precede valid operator overrides and
 registry wire defaults. Exact OpenCode Go pins and the Command Code API-key preset's case-insensitive

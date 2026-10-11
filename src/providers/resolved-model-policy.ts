@@ -28,7 +28,7 @@ export type StaticProviderPolicyField =
   | "responsesPath" | "chatCompletionsPath" | "keyOptional" | "freeTier" | "modelSuffixBracketStrip"
   | "defaultModel" | "models" | "liveModels" | "contextWindow" | "modelContextWindows"
   | "modelDisplayNames" | "modelInputModalities" | "modelMaxInputTokens" | "defaultMaxOutputTokens"
-  | "modelMaxOutputTokens" | "reasoningEfforts" | "modelReasoningEfforts" | "modelReasoningEffortsAuthoritative"
+  | "modelMaxOutputTokens" | "minMaxOutputTokens" | "reasoningEfforts" | "modelReasoningEfforts" | "modelReasoningEffortsAuthoritative"
   | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap"
   | "reasoningWireFormat" | "noVisionModels" | "noReasoningModels" | "noTemperatureModels"
   | "noTopPModels" | "noStopModels" | "noPenaltyModels" | "noJsonSchemaModels" | "parallelToolCalls"
@@ -216,7 +216,7 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
   putMergedMap("modelSupportsVerbosity", entry?.modelSupportsVerbosity, provider.modelSupportsVerbosity);
   for (const key of [
     "modelCapabilities", "modelAutoCompactTokenLimits", "modelSuppressSyntheticMax",
-    "modelReasoningSummaryDelivery", "codexToolMode", "modelAdapters",
+    "modelReasoningSummaryDelivery", "codexToolMode", "modelAdapters", "minMaxOutputTokens",
   ] as const) putScalar(key, undefined);
   for (const key of ["modelContextWindows", "modelMaxInputTokens"] as const) {
     const [value, source] = input.providerName === "openai-apikey"

@@ -26,7 +26,7 @@ validation-pending. Import alone supplies no entitlement evidence for the model 
 
 Static policy and observed catalog evidence are separate authorities. Antigravity grouping and selection projection follow the [discovered effort-family contract](providers-and-adapters.md#antigravity-effort-families).
 `src/providers/resolved-model-policy.ts` resolves and freezes only registry/operator static facts,
-hard wire pins, aliases, and explicit false/empty declarations. Discovery responses, generated
+hard wire pins, aliases, explicit false/empty declarations, and the operator-only `minMaxOutputTokens` scalar with provenance. Discovery responses, generated
 metadata, cache freshness, availability, credentials, account state, quota and health never enter
 that result. A catalog consumer may pass observed context, max-input, or max-output values to the
 resolver's call-local limit projection; the lower observed/static value wins, and an observed value

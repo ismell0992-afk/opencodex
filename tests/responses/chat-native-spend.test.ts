@@ -507,3 +507,37 @@ test("the replacement send's request copy is released before the replacement str
     await stopFixtureServers();
   }
 });
+
+for (const stream of [false, true]) {
+  for (const cap of [{ max_tokens: 512 }, { max_completion_tokens: 512 }, {}]) {
+    test(`native Chat floor reserves the raised budget before ${stream ? "stream" : "buffered"} dispatch (${JSON.stringify(cap)})`, async () => {
+      const upstream = mockChatUpstreamCapturing();
+      const config = mockConfig(`${upstream.server.url.toString().replace(/\/$/, "")}/v1`, { minMaxOutputTokens: 4096 });
+      config.spend = { pool: { maxTokens: 1000 } };
+      saveConfig(config);
+      activeServer = startServer(0);
+      const response = await fetch(new URL("/v1/chat/completions", activeServer.url), {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "mock/test-model", messages: [{ role: "user", content: "hello" }], stream, ...cap }),
+      });
+      expect(response.status).toBe(429);
+      expect(response.headers.get("x-opencodex-local-refusal")).toBe("workflow_spend_exhausted");
+      expect(upstream.captured).toHaveLength(0);
+      await response.text();
+    });
+  }
+}
+test("native Chat without the floor retains caller-budget spend admission", async () => {
+  const upstream = mockChatUpstreamCapturing();
+  const config = mockConfig(`${upstream.server.url.toString().replace(/\/$/, "")}/v1`);
+  config.spend = { pool: { maxTokens: 1000 } };
+  saveConfig(config);
+  activeServer = startServer(0);
+  const response = await fetch(new URL("/v1/chat/completions", activeServer.url), {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "mock/test-model", messages: [{ role: "user", content: "hello" }], max_tokens: 512 }),
+  });
+  expect(response.status).toBe(200);
+  await response.text();
+  expect(upstream.captured[0]?.max_tokens).toBe(512);
+});

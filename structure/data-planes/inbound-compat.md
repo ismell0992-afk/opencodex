@@ -154,7 +154,7 @@ provider default, and raises only values below the floor; without any budget it 
 and omits the legacy key when the modern key wins, without mutating the raw caller body.
 Configured defaults apply on native Chat only while this floor is enabled. Unset preserves both
 caller aliases and omitted budgets unchanged. Other adapters retain their own budget resolution.
-`tests/adapters/openai/openai-chat-min-max-output-tokens.test.ts` covers each native delivery shape.
+`tests/adapters/openai/openai-chat-min-max-output-tokens.test.ts` covers each native delivery shape. Native ingress resolves the opted-in effective floor before spend seed admission; `tests/responses/chat-native-spend.test.ts` verifies over-budget streaming/buffered requests never dispatch.
 
 On the response side, the upstream `service_tier` echo (xAI Priority Processing, OpenAI fast
 tier) relays to the Chat Completions caller on every delivery shape: the non-streaming body

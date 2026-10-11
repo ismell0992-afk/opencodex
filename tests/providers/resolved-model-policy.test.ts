@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { buildOpenAIChatPassthroughRequest } from "../../src/adapters/openai-chat";
 import type { OcxProviderConfig } from "../../src/types";
 import { captureWireAdapterHardPins } from "../../src/types";
 import type { ProviderRegistryEntry } from "../../src/providers/registry/types";
@@ -863,3 +864,17 @@ describe("resolved static model policy parity", () => {
     expect(entry.modelContextWindows?.[MODEL]).toBe(100_000);
   });
 });
+
+for (const floor of [4096, 8192, undefined]) {
+  test(`captured Chat output floor ${floor} keeps scalar provenance and wire parity`, () => {
+    const configured = provider({ minMaxOutputTokens: floor });
+    const policy = resolveModelPolicy({ providerName: "fixture", modelId: MODEL, provider: configured, transportMatchedRegistry: false });
+    expect(policy.provider.minMaxOutputTokens).toBe(floor);
+    expect(policy.provenance.provider.minMaxOutputTokens).toBe(floor === undefined ? "unknown" : "operator");
+    if (floor === undefined) expect(policy.provider).not.toHaveProperty("minMaxOutputTokens");
+    const captured = { ...policy.provider, apiKey: "fixture-key" } as OcxProviderConfig;
+    const wire = JSON.parse(buildOpenAIChatPassthroughRequest(captured, { messages: [], max_tokens: 512 }, MODEL, false).body);
+    expect(wire.max_tokens).toBe(floor ?? 512);
+    expect(policy.provider).not.toHaveProperty("apiKey");
+  });
+}
