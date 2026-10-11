@@ -355,6 +355,8 @@ Windows에서 Task Scheduler 항목을 만들려면 권한 상승이 필요합�
 
 시작할 때 `another process owns the runtime mutation lease`가 보고되거나 `ocx service status`에 `Runtime mutation lease busy`가 표시되면, 프록시가 실행 중이 아니더라도 이 리스가 시작이나 서비스 변경을 막고 있는 것입니다. 메시지에는 잠금 경로, 기록된 PID, 그 PID가 현재 살아 있는지 여부, 확인할 수 있는 경우 실행 파일 이름, 리스 경과 시간이 들어 있습니다. 프로세스의 신원은 검증되지 않습니다. PID가 재사용되었을 수 있으므로, 생존 여부와 실행 파일 이름은 지금 그 PID를 쓰고 있는 프로세스에 대한 정보입니다. 작업이 끝날 때까지 기다린 뒤 다시 시도하세요. 이 PID만 보고 잠금을 삭제하거나 프로세스를 중지하지 마세요. 리스 경과 시간이 30초를 넘고 기록된 PID가 더 이상 살아 있지 않으면 이후의 변경 시도가 오래된 리스를 회수할 수 있습니다. `ocx service status`는 리스를 확인만 합니다.
 
+Windows에서는 이 공용 Node/Bun 진단 경로가 실행 파일 이름 조회용 프로그램을 실행하지 않습니다. 기록된 PID, 생존 여부, 리스 경과 시간과 복구 안내는 계속 표시됩니다.
+
 ### `ocx codex-shim <install|status|uninstall|remove>`
 
 macOS와 Linux에서 `ocx codex-shim install`은 확정된 OpenCodex 홈에 전용 wrapper `<OPENCODEX_HOME>/bin/codex`와 셸에서 읽을 `<OPENCODEX_HOME>/codex-shell-env.sh`를 설치합니다. 원래 런처는 brew, npm, fnm이 설치한 위치에 그대로 있어 패키지 관리자 업데이트와 버전 롤백 뒤에도 다시 감쌀 필요가 없습니다. Windows는 기존처럼 스크립트 런처를 제자리에서 감싸며 실제 `codex.exe`는 건드리지 않습니다. Windows에서 `codex.exe`만 제공된다면 `ocx service install`을 사용하세요.
@@ -466,3 +468,5 @@ npm에 게시하면 사용할 수 있게 됩니다.
 ## Setup port validation
 
 `ocx init`의 포트는 1–65535 범위의 십진 정수입니다. Enter만 누르면 10100을 사용합니다. `0`, `10100oops`, `1.5` 같은 잘못된 값은 임의로 바꾸거나 자르지 않고, 오류를 알린 뒤 포트를 다시 묻습니다.
+
+Linux의 `ocx service install`은 linger가 이미 켜졌는지 확인하고, 비활성 상태일 때만 활성화 안내를 제공합니다. 확인할 수 없으면 불확실성을 표시합니다. macOS의 유효하고 활성화된 Desktop 로그인 등록은 현재 세션에 로드되지 않아도 다음 로그인용으로 인정합니다. `ocx service status`와 `ocx status`가 이를 구분하며, 잘못된 plist·비활성 등록·불명확한 검사 결과는 보호 근거로 사용하지 않습니다.

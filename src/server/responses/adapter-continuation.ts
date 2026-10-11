@@ -1,4 +1,4 @@
-import { rotateAnthropicAccountOnResponse } from "../../oauth/anthropic-account-refusal";
+import { rotateAnthropicAccountOnResponseForInstance } from "../../oauth/anthropic-account-refusal";
 import type { ResponsesRequestContext } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
@@ -35,7 +35,7 @@ import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { bindRouteReasoningReplayScope } from "./core-replay";
 import {
   ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
-  getAnthropicPoolAccessSnapshot,
+  anthropicRoutingFor,
   formatAnthropicProviderForLog,
 } from "../../oauth/anthropic-routing";
 import {
@@ -83,6 +83,9 @@ export function createAdapterContinuations(
     | "oauthDispatch"
     | "invalidateSameTargetRequest"
     | "resolveSelectionAdapter"
+    | "resolveCopilotSelection"
+    | "anthropicInstance"
+    | "currentAnthropicRouteDecision"
     | "anthropicRouteDecision"
     | "anthropicPoolAccountId"
     | "anthropicPoolFailovers"
@@ -102,7 +105,8 @@ export function createAdapterContinuations(
     | "noteAdapterPhysicalSend"
     | "noteAdapterRecoveryWithheld"
     | "remainingTransientSendBudget"
-    | "noteTransientSends"
+    | "adapterSendBudget"
+    | "transientSendReporter"
     | "reserveCredentialHop"
     | "pendingHopPermit"
     | "sendBudgetExhausted"
@@ -122,6 +126,8 @@ export function createAdapterContinuations(
     oauthDispatch,
     invalidateSameTargetRequest,
     resolveSelectionAdapter,
+    anthropicInstance,
+    currentAnthropicRouteDecision,
     anthropicSessionKey,
     commitResolvedOAuthSelection,
     applyFailoverSnapshot,
@@ -135,7 +141,7 @@ export function createAdapterContinuations(
     noteAdapterPhysicalSend,
     noteAdapterRecoveryWithheld,
     remainingTransientSendBudget,
-    noteTransientSends,
+    transientSendReporter,
     reserveCredentialHop,
     sendBudgetExhausted,
   } = sendBudgetState;
@@ -151,7 +157,8 @@ export function createAdapterContinuations(
   /**
    * One bounded internal re-ask for Anthropic end_turn-without-tool-call turns. Replays the
    * continuation on a 429 with the same-key retry budget (hoisted per request), then falls
-   * back to key/account failover; a failure becomes an in-stream adapter error so the client
+   * back to key/account failover, rebuilding Copilot model, wire, and credential negotiation.
+   * A failure becomes an in-stream adapter error so the client
    * never sees a second hidden HTTP response or an unbounded retry loop.
    */
   const fetchTerminalGuardContinuation = async function* (
@@ -211,6 +218,8 @@ export function createAdapterContinuations(
       try {
         if (transportState.activeAdapter.fetchResponse) {
           transportState.noteRoutedAttemptSend(continuationEstimate, replayKind);
+          const producer = adapterDispatchBudget?.beginSpendProducer?.();
+          try {
           return await withProviderRequestSlot(route.providerName, route.provider, nextParsed.modelId, upstream.signal, pacingSlot =>
             transportState.activeAdapter.fetchResponse!(builtContinuationRequest, {
               kiroPreferAccountFailover: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro"),
@@ -228,6 +237,7 @@ export function createAdapterContinuations(
                 modelId: nextParsed.modelId,
               }),
             }));
+          } finally { producer?.close(); }
         }
         // Same #1851 scope guard as the initial send: transient-5xx retry only for direct
         // Google AI Studio; every other adapter keeps reset-only semantics here.
@@ -237,6 +247,9 @@ export function createAdapterContinuations(
           : fetchWithResetRetry;
         return await fetchContinuationWithRetryPolicy(
           recovery => {
+            sendBudgetState.adapterSendBudget?.startRequest?.({
+              poolId: logCtx.spendPoolId ?? route.providerName, identityId: logCtx.accountLogLabel,
+            });
             transportState.noteRoutedAttemptSend(continuationEstimate, recovery ?? replayKind);
             return fetchWithHeaderTimeout(
               builtContinuationRequest.url,
@@ -261,10 +274,10 @@ export function createAdapterContinuations(
             // Same request-scoped budget as the initial send and the 429/rotation refetches:
             // a terminal-guard continuation is another leg of ONE request, so handing it a
             // fresh `attempts` would let one request exceed the configured total-send ceiling.
-            ...(continuationTransientPolicy
+            ...(continuationTransientPolicy || sendBudgetState.adapterSendBudget?.spendEnforced
               ? {
-                attempts: remainingTransientSendBudget(continuationTransientPolicy.attempts),
-                onSendsConsumed: noteTransientSends,
+                attempts: remainingTransientSendBudget(continuationTransientPolicy?.attempts ?? 1),
+                onSendsConsumed: transientSendReporter(),
               }
               : {}),
           },
@@ -366,6 +379,12 @@ export function createAdapterContinuations(
         if (rotated) {
           try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
           route.provider = rotated;
+          try { await transportState.resolveCopilotSelection(nextParsed); }
+          catch (error) {
+            yield { type: "error", message: `Provider continuation failed: ${redactSecretString(error instanceof Error ? error.message : String(error))}`,
+              ...(options.abortSignal?.aborted || upstream.signal.aborted ? { status: 499 } : {}) };
+            return;
+          }
           invalidateSameTargetRequest();
           transportState.activeAdapter = resolveSelectionAdapter(
             resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
@@ -390,33 +409,34 @@ export function createAdapterContinuations(
         }
       }
      if (
-       (response.status === 429 || response.status === 403)
+       (response.status === 429 || response.status === 403 || response.status === 401)
+       && anthropicInstance
        && transportState.anthropicPoolAccountId
         && !isNonReplayableResponse(response)
       ) {
-        const nextAccountId = await rotateAnthropicAccountOnResponse(response, {
+        const nextAccountId = await rotateAnthropicAccountOnResponseForInstance(anthropicInstance, response, {
           config, accountId: transportState.anthropicPoolAccountId, sessionKey: anthropicSessionKey,
-          model: route.modelId, requestKey: transportState, decision: transportState.anthropicRouteDecision, signal: upstream.signal,
+          model: route.modelId, requestKey: transportState, decision: transportState.anthropicRouteDecision, currentDecision: currentAnthropicRouteDecision, signal: upstream.signal,
           canRetry: !sendBudgetExhausted() && transportState.anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
           allowAccountRefusal, allow429Recovery: allowAccountRefusal,
         });
         if (nextAccountId) {
           try {
-            const admitted = await commitResolvedOAuthSelection(await getAnthropicPoolAccessSnapshot(nextAccountId));
+            const admitted = await commitResolvedOAuthSelection(await anthropicRoutingFor(anthropicInstance).getAnthropicPoolAccessSnapshot(nextAccountId));
             if (!admitted) throw new Error("OAuth selection changed during recovery");
             try { void response.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
             transportState.anthropicPoolAccountId = admitted.accountId;
             transportState.anthropicPoolFailovers += 1;
             route.provider = { ...route.provider, apiKey: admitted.accessToken };
             invalidateSameTargetRequest();
-            logCtx.provider = formatAnthropicProviderForLog("anthropic", admitted.accountId, config);
+            logCtx.provider = formatAnthropicProviderForLog(anthropicInstance, admitted.accountId, config);
             transportState.activeAdapter = resolveSelectionAdapter(
               resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
               config.cacheRetention,
             );
             sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
             recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
-            nextContinuationRecoveryKind = "anthropic-oauth-429";
+            nextContinuationRecoveryKind = response.status === 401 ? "oauth-401" : "anthropic-oauth-429";
             continue;
           } catch {
             // fall through to emit continuation error below
@@ -513,9 +533,9 @@ export function createAdapterContinuations(
               recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
               // The replay goes out on the next iteration. An adapter that owns its ladder
               // reserves for that send itself, so hand this reservation down rather than let it
-              // take a second one for the same replay. A helper-routed replay needs no handoff:
-              // its reporter settles the booking made above.
-              if (adapterOwnsDispatch) sendBudgetState.pendingHopPermit = hop.permit;
+              // take a second one for the same replay. A helper-routed replay carries the
+              // same permit so its reporter settles only this booking.
+              sendBudgetState.pendingHopPermit = hop.permit;
               nextContinuationRecoveryKind = "oauth-account-429";
               kiroRefusalPendingReplay = response;
               continue;
@@ -604,9 +624,9 @@ export function createAdapterContinuations(
               recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
               // The replay goes out on the next iteration. An adapter that owns its ladder
               // reserves for that send itself, so hand this reservation down rather than let it
-              // take a second one for the same replay. A helper-routed replay needs no handoff:
-              // its reporter settles the booking made above.
-              if (adapterOwnsDispatch) sendBudgetState.pendingHopPermit = hop.permit;
+              // take a second one for the same replay. A helper-routed replay carries the
+              // same permit so its reporter settles only this booking.
+              sendBudgetState.pendingHopPermit = hop.permit;
               nextContinuationRecoveryKind = "oauth-account-429";
               continue;
             }

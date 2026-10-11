@@ -356,8 +356,9 @@ a genuine client identity retains per-credential synthesized session ids.
 and account switch, destination isolation, bounded parsing and credential exclusion.
 
 OAuth. Behind `managedMessagesNativeOAuth`, which `resolveProtocolSettings` treats as off unless
-`managedMessagesNative` is on. Only the `anthropic` provider the OAuth store serves, only to
-`api.anthropic.com` (the builder refuses any other host for an OAuth token). Native dispatch uses
+`managedMessagesNative` is on. The two builtin Anthropic OAuth instances each use their own store namespace,
+and their OAuth tokens are sent only to `api.anthropic.com` (the builder refuses any other host for an
+OAuth token). Native dispatch uses
 shared Anthropic strategy, model-route restrictions and session affinity. A shared Desktop system
 cache cohort never supplies affinity. `src/server/messages-native-oauth.ts` resolves and commits
 an exact credential generation and rechecks the current route and binding before each physical send.
@@ -371,6 +372,13 @@ The local pool id is never used; malformed, absent and unknown metadata stays un
 Every rebuild starts from the source body; the binding also checks UUID equality before send.
 Conflicting provider credential headers fail before dispatch on every OAuth build, including
 builds without a provider UUID.
+
+Pool 2 requires explicit configured ownership; endpoint equality cannot establish
+it. A marked endpoint override receives the same native eligibility decision as
+the primary pool. Ingress and protocol preview both exclude qualified Pool 2
+selectors from caller-forward; bare Claude selection retains its existing meaning.
+The [instance runtime contract](../providers/anthropic-account-pool.md#instance-scoped-runtime)
+owns per-pool state and credential/target fencing.
 Native OAuth Messages collect top-level and typed inline tool declarations before rewriting declared
 client names in tool choices, uses, references, additions and removals, including typed tool-result
 content. Typed built-in names stay fixed; ambiguous original or wire-name collisions are refused.
@@ -391,6 +399,12 @@ native beta allowance retains the source-listed inline-tool, per-turn control, t
 advisor and scoped-cache schemas. Advisor may perform sub-inference already requested by the caller;
 no feature or beta-gated body is injected. Generic managed callers keep the narrower allowance,
 and compatible destinations receive no first-party allowance. These handles grant no credential authority.
+
+Managed native Messages record validated caller controls as `requestedEffort` on the final row
+and physical attempts. Existing annotations win; otherwise a recognized `output_config.effort`
+wins, followed by disabled thinking (`none`) or an enabled positive safe-integer budget
+(`budget:<tokens>`). Adaptive thinking without an explicit effort stays absent. This metadata
+comes from the body handed to the lane; it does not rewrite the wire or confirm upstream effort.
 
 `handleNativeMessages` mirrors native Chat on the shared pieces: `beginInferenceAttempt`,
 `createFinalRequestLog`, the request spend tracker charged per physical send, proactive key

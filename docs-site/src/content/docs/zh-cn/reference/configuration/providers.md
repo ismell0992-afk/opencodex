@@ -42,6 +42,9 @@ ocx models provider openrouter on
 | `pool.cacheAffinity?` | `boolean` | `true` | 已绑定 Codex 线程的 cache-affinity 排序，独立于 `pool.kernel`。默认开启；省略该键或设为 `true` 即为开启，非法值视为开启。live 绑定优先于 quota 余量：`quota` 不会仅因用量越过 `autoSwitchThreshold` 就移动线程。账号暂停、不可用或真正耗尽（已知 usage 为 100%）时仍会离开，且只改绑到确有额度余量且 usage 严格更低的账号。用量未知的账号不会作为已绑定任务的改绑目标。设为 `false` 可恢复按阈值改绑。affinity 是重排而非钉死。 |
 | `accountPoolStickyLimit?` | `number` | `1` | 一次 round-robin 选择在推进前保留的新建/未绑定任务分配数。计数在任务绑定时增加，而不是在上游成功后增加。范围 1–100；仅当 `accountPoolStrategy` 为 `round-robin` 时生效。 |
 | `upstreamFailoverThreshold?` | `number` | `3` | 连续发生多少次瞬态故障后，后续新会话会切换到备用上游。设为 `0` 可禁用。对于常规 Responses 和原生 compact 发送，已证明的连接前 DNS/TCP 不可达故障按 provider-host 粒度记录，不影响账户健康、账户冷却、线程/会话亲和性、活动账户选择或 Pool 路由，也不会计入此阈值。 |
+| `codexFailureWindow?` | `boolean` | `true` | 60 秒滑动失败率，与连续计数一起使用。至少 20 次且失败率 ≥25% 时账号降级，新线程避开它；比率 ≤10% 并持续 30 秒后恢复。已绑定线程不切换。`false` 只使用连续计数。 |
+| `codexPinnedTransientPolicy?` | `"hold" \| "detour-new-threads"` | `"hold"` | 手动固定的账号降级时，`hold` 继续使用并记录警告；`detour-new-threads` 只把新线程放到其他账号。不会改派进行中的请求，也不会在已发送后重发。 |
+| `codexWsReuseAcrossTurns?` | `boolean` | `false` | 可选：同一账号和线程的 Codex WebSocket 跨回合复用。开启后忙套接字最多等待 750ms，模型或服务层级变化时最多保留 2 个套接字，回合状态头只出现在每条消息上。 |
 | `upstreamHostCircuitThreshold?` | `number` | `0` | 原生 OpenAI forward Responses 与 compact 发送的可选断路器阈值，仅统计已证明的连接前 DNS/TCP 故障。`0` 表示禁用；`1`–`20` 表示在这么多个终止逻辑请求失败后，对 provider-origin 冷却 30 秒。断路期间会在账户选择和上游发送之前返回带 `Retry-After` 的 `503`；冷却结束后只允许一个半开请求。超时和 HTTP 响应不计数，任意 HTTP 响应都会关闭断路器。 仅适用于未固定账户的 Codex Pool 路由；在 `codexAccountMode: "direct"` 或使用账户限定选择器时不会启用。 |
 | `modelCacheTtlMs?` | `number` | `300000` | 每个提供者 `/models` 缓存的新鲜度窗口。 |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic 提示缓存策略：禁用、5 分钟临时缓存，或 1 小时扩展缓存。 |
@@ -66,7 +69,7 @@ selector，而不是分配一个新名称。
 
 ## 保留的 OpenAI 提供者
 
-`openai` 和 `openai-apikey` 是固定的保留 id。`openai.codexAccountMode` 默认是 `"pool"`，会在主账户和新增账户之间选择；`"direct"` 只使用当前调用者/主登录态。API 只使用其配置的 API key 或 key 池。请使用裸模型名或 `openai-apikey/<model>`；不存在跨路由凭据回退。API 的 GPT-5.6 行携带 922,000 上下文 / 922,000 最大输入元数据，而 Pro 虚拟 id 会重写为基础线协议模型并带上 `reasoning.mode: "pro"`。
+`openai` 和 `openai-apikey` 是固定的保留 id。`openai.codexAccountMode` 默认是 `"pool"`，会在主账户和新增账户之间选择；`"direct"` 只使用当前调用者/主登录态。API 只使用其配置的 API key 或 key 池。请使用裸模型名或 `openai-apikey/<model>`；不存在跨路由凭据回退。API 的 GPT-5.6 行携带 1,050,000 上下文 / 922,000 最大输入元数据，而 Pro 虚拟 id 会重写为基础线协议模型并带上 `reasoning.mode: "pro"`。
 
 `openaiProviderTierVersion: 2` 标记当前的单提供者投影。对已发布的 v1 配置进行迁移之前，opencodex 会创建 `config.json.pre-openai-tiers-v2.bak`，且不会覆盖不同的备份文件，并会把已知的旧式命名空间选择 id 重写为裸 id。
 
@@ -135,7 +138,7 @@ selector，而不是分配一个新名称。
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean; repairInvalidIds?: boolean }` | 默认关闭的下游 SSE 修复，用于精确占位 id、缺失的终止 id，以及（`repairInvalidIds`）缺少规范 `msg_`/`rs_` 前缀的 message/reasoning id。function-call id 永远不会被重写。内置 DeepSeek 默认启用后两项。 |
 | `responsesSnapshotRepair?` | `boolean` | 默认关闭的客户端修复，用于补全 SSE 与 JSON 中稀疏 Responses 生命周期快照缺失的 status、output 和工具元数据；原始检查与持久化保持不变。 |
 | `retryOn429?` | `{ enabled?: boolean; attempts?: number; intervalMs?: number; maxIntervalMs?: number; respectRetryAfter?: boolean }` | 仅限 API-key 提供商（`authMode: "key"`）。可选的同目标 429 重试：未配置 `retryOn429` 时功能关闭；对象存在即启用，除非 `enabled: false`。收到 429 时等待（上游 `Retry-After` 或固定间隔）后在相同 key 上重放完全相同请求，再进入任何 key 故障转移——覆盖主文本恢复循环、Responses passthrough、图像/视频桥、web-search 侧车与终结续接。重放仅适用于流开始前的 HTTP 429 响应；自定义 `runTurn` 传输不在 HTTP 重试循环范围内。`attempts` 是首个 429 之后的同 key 重放次数（总发送次数 = `attempts` + 1），是主恢复循环、终结守卫续接与桥接重试共享的按请求统一预算；`attempts` 耗尽只会停止进一步的同 key 重放：随后按可用目标进行正常的 key 故障转移或最终错误处理——key 认证的 passthrough 线路上没有故障转移，因此耗尽的 429 会原样透出。Codex 自身从不重试 429，因此这是单 key 提供商唯一的防线。默认值：`enabled: true`、`attempts: 3`、`intervalMs: 5000`、`maxIntervalMs: 60000`（单次等待以 `maxIntervalMs` 为上限，其本身上限 600000）、`respectRetryAfter: true`。 |
-| `transientRetryOn5xx?` | `{ enabled?: boolean; attempts?: number }` | 仅限使用 key 认证的 `openai-chat` 与 `openai-responses` 提供商。`authMode: "forward"` 的提供商（ChatGPT 账号池）从不读取此选项，保持默认重试次数。可选的流开始前上游瞬态状态码（500、502、503、504、520、521、522）重试：未配置时关闭；对象存在即启用，除非 `enabled: false`。覆盖初始 Responses 请求、终结守卫续接、原生 `/v1/chat/completions`，以及 429/账户恢复重新获取。`attempts` 是单个请求允许向上游发送的总次数，包含首次发送（1..10，默认 3）；它是与连接重置恢复共享的按请求预算，因此 `3` 表示最多只有三个实际请求到达提供商。等待采用固定 400 毫秒的指数退避，上限为 5 秒，并遵循 `Retry-After`。此选项独立于处理速率限制的 `retryOn429`；流开始后的故障绝不会重放。 |
+| `transientRetryOn5xx?` | `{ enabled?: boolean; attempts?: number }` | 仅限使用 key 认证的 `openai-chat` 与 `openai-responses` 提供商。`authMode: "forward"` 的提供商（ChatGPT 账号池）从不读取此选项，保持默认重试次数。可选的流开始前上游瞬态状态码（500、502、503、504、520、521、522）重试：未配置时关闭；对象存在即启用，除非 `enabled: false`。覆盖初始 Responses 请求、终结守卫续接、原生 `/v1/chat/completions`，以及 429/账户恢复重新获取。`attempts` 是单个请求允许向上游发送的总次数，包含首次发送（1..10，默认 3）；它是与连接重置恢复共享的按请求预算，因此 `3` 表示最多只有三个实际请求到达提供商。等待采用固定 400 毫秒的指数退避，上限为 5 秒，并遵循 `Retry-After`。此选项独立于处理速率限制的 `retryOn429`；流开始后的故障绝不会重放。 每个 Combo 目标都把预先预约的首次发送计入该目标配置的总次数；`attempts: 1` 只发送一次，不会退还预约来增加额度，也不会提高共享上限。发送前的本地拒绝或取消会释放未使用的预约。 |
 | `retryOnReset?` | `{ enabled?: boolean; replacements?: number }` | 适用于原生 `openai-responses` 提供商（包含 `authMode: "forward"`），以及收到上游响应头之前的通用 Responses 转换发送路径。可选地替换一次在调用方尚未观察到任何内容时就失败的发送：未配置时关闭；对象存在即启用，除非 `enabled: false`。涵盖两个不确定阶段——响应头到达前连接断开，以及响应头之后 SSE 正文只承载控制事件时断开。canonical ChatGPT 上游 WebSocket 在 create 帧发出之后、任何 Responses 事件到达之前关闭或出错时，也按同样方式处理，其替换发送走 HTTP。只有自包含的请求才会被替换：`store: false`、完整的 `input`、没有 `previous_response_id`／`conversation`／`stream_id`，且只使用由客户端执行的工具。`replacements` 是单个逻辑请求在所有环节和所有组合子请求中可以进行的替换发送次数（1..2，默认 1）；它既不是按环节的重试次数，也不是发送预算，因此替换发送仍必须落在该环节已有的发送额度之内。已经产生输出或工具调用的请求，无论此值为何都不会被替换。如果上游已经开始了第一次推理，被替换的推理仍可能计费，因此该选项默认关闭。 通用转换发送路径的首次发送和重建后的发送都支持响应头之前连接重置后的替换，使用同一授权和发送预算。适配器自行管理的传输，以及收到上游响应头之后的转换流故障，均不在此选项范围内。 |
 | `autoToolChoiceOnlyModels?` | `string[]` | `tool_choice` 只接受 `auto` 或 `none` 的模型；强制选择会被降级。 |
 | `preserveReasoningContentModels?` | `string[]` | 需要在聊天历史中保留先前 assistant `reasoning_content` 的模型。从仪表板保存时会保留已存储的列表（包括 `[]`）。`PATCH /api/providers?name=<provider>` 接受数组，或传入 `null` 清除该字段。将提供方改到其他适配器、base URL 或认证模式的保存不会保留该列表（见下文）。 |
@@ -252,6 +255,65 @@ affinity。这些策略不能规避 provider enforcement。
 
 :::caution[Experimental]
 除非你理解 Anthropic 账户策略风险，否则请保持关闭。若不确定，优先手动使用 `ocx account use anthropic <id>` 切换。
+:::
+
+### Anthropic · Pool 2 (`anthropic2`)
+
+`anthropic2`（“Anthropic · Pool 2”）是第二个内置的 Anthropic OAuth 提供者，拥有自己的账户池。它与 `anthropic` 使用同一套 Anthropic 实现：相同的登录流程、线路格式、原生 Messages 与 Responses 桥接以及模型元数据。只有账户及其所在的账户池是分开的。通过模型前缀选择账户池：`anthropic/claude-sonnet-5` 使用主账户池，`anthropic2/claude-sonnet-5` 使用 Pool 2。
+
+在你添加之前，Pool 2 处于休眠状态。使用 `ocx login anthropic2` 登录，或在控制面板的提供者页面添加 **Anthropic · 账户池 2**。首次登录成功后会创建带有标记 `"anthropicOAuthInstance": "anthropic2"` 的 `providers.anthropic2`。Pool 2 永远不会成为默认提供者：不带前缀的 `claude-*` 模型名、默认模型以及 Claude Code 调用方转发仍解析到 `anthropic`。你此前自行创建、没有标记的 `anthropic2` 条目保持其自定义含义；登录会拒绝该名称冲突，既不改写该条目，也不改写你的凭据。
+
+Pool 2 从自己的提供者条目读取账户池设置。键、默认值和行为与上文的顶层 `anthropicAccountPool` 相同，且不从主账户池继承任何内容。`providers.anthropic.anthropicAccountPool`，以及任何其他提供者上的该字段，都会被拒绝。
+
+```json
+{
+  "anthropicAccountPool": { "enabled": true, "strategy": "quota" },
+  "providers": {
+    "anthropic2": {
+      "adapter": "anthropic",
+      "authMode": "oauth",
+      "baseUrl": "https://api.anthropic.com",
+      "anthropicOAuthInstance": "anthropic2",
+      "anthropicAccountPool": { "enabled": true, "strategy": "round-robin" }
+    }
+  }
+}
+```
+
+两个账户池在 opencodex 内部相互隔离：
+
+- **凭据：** Pool 2 账户以独立的 `anthropic2` 键保存在受保护的凭据存储中。若登录的令牌或已验证的 Anthropic 账户已保存在另一个账户池中，该登录会被拒绝。
+- **账户池设置与运行时状态：** 选择、会话亲和性、冷却、暂停、模型路由和按账户阈值都只属于一个账户池。路由的 `fallback: true` 只在同一账户池内放宽。
+- **配额与用量：** 用量探测、配额缓存和用量归属按账户池分别记录，因此同一个账户 ID 同时出现在两个账户池中时，会有两条独立记录。
+- **重置额度：** Pool 2 使用自己的日志（`anthropic2-reset-grant-ledger.json`），与保持不变的主账户池日志并存。
+- **恢复：** 直接的 `anthropic2/<model>` 请求绝不会回退到主账户池，Pool 2 的速率限制或拒绝也绝不会让主账户池的账户进入冷却。显式指定两个账户池的组合（combo）保留你声明的目标。
+
+这种分离是 opencodex 内部的路由边界。它不会改变 Anthropic 对待你账户的方式，也不会消除上文所述的账户策略风险。
+
+Pool 2 账户只能通过浏览器 OAuth 添加。与 `anthropic` 不同，Pool 2 从不导入、接管或回写 Claude Code CLI 令牌；这一差异是有意为之。Pool 2 初始为空；没有可用 Pool 2 账户的 Pool 2 请求会以认证错误失败，而不会借用主账户池或 Claude Code 的凭据。
+
+账户命令和管理 API 按名称指定账户池：`ocx account pool anthropic2 …`、`ocx account auto-switch anthropic2 …`、`ocx account routes anthropic2 …` 以及 `ocx account anthropic-reset-grants --provider anthropic2`。账户池设置和重置额度端点接受 `provider: "anthropic2"`；省略时仍使用主账户池。
+
+#### 辅助功能的账户池选择（`anthropicInstance`）
+
+网页搜索和视觉辅助功能在全局 `webSearchSidecar`、`visionSidecar` 设置以及 Claude Code 覆盖项 `claudeCode.webSearchSidecar`、`claudeCode.visionSidecar` 中接受可选的 `anthropicInstance`。当辅助功能的后端为 Anthropic 时，控制面板将其显示为 **账户池** 选择项。
+
+| 值 | 行为 |
+| --- | --- |
+| 未设置（默认） | 跟随当前请求的账户池：`anthropic2/<model>` 请求使用 Pool 2，`anthropic/<model>` 请求使用主账户池。来自其他提供者的请求保留现有的辅助功能发现逻辑，该逻辑从不选择 Pool 2。 |
+| `"anthropic"` | 始终使用主账户池。 |
+| `"anthropic2"` | 始终使用 Pool 2。 |
+
+该字段仅在辅助功能的后端解析为 Anthropic 时生效。与其他后端一起设置会导致校验错误；由于网页搜索默认使用 OpenAI，请同时设置 `"backend": "anthropic"`。以另一个账户池限定的辅助模型（例如 `anthropic/claude-sonnet-5` 搭配 `"anthropicInstance": "anthropic2"`）同样会被拒绝。如果所选账户池没有可用账户，辅助功能会在发送任何内容之前失败，不会切换到另一个账户池。此时主请求会在没有该辅助功能的情况下照常进行。未设置的选择会保存为缺省，而不是 `"anthropic"`。
+
+```json
+{
+  "webSearchSidecar": { "backend": "anthropic", "anthropicInstance": "anthropic2" }
+}
+```
+
+:::caution[降级]
+不包含 Pool 2 的版本无法识别 `anthropic2` 条目。安装旧版本之前，请停止代理，备份 `config.json` 和 `auth.json`，并从 `config.json` 中删除 `providers.anthropic2`。Pool 2 从不移动或改写主账户池的凭据。不支持在 Pool 2 处于启用状态时原地降级。
 :::
 
 ### 托管记录形状
@@ -446,7 +508,7 @@ Vercel AI Gateway 可以在多个底层推理提供者之间路由一个模型�
 显示名称覆盖不会改变模型 ID、元数据（包括能力）、排序、路由组合别名和带账户限定的条目。
 此本地目录覆盖不会重命名 HTTP 模型列表中的条目或虚拟 `*-pro` 条目。
 
-预览版 GPT-5.6 回退条目使用相同机制。OpenAI API key 预设会为基础和 Pro id 设定 `922000` 上下文和 `922000` 最大输入；OpenRouter 会为 `openai/gpt-5.6-sol`、`openai/gpt-5.6-terra` 和 `openai/gpt-5.6-luna` 设定 `922000` 上下文。Pool/Direct 会声明 `922000`；同步后的目录会声明 `max`，同时保留 `xhigh` 的独立性。
+预览版 GPT-5.6 回退条目使用相同机制。OpenAI API key 预设会为基础和 Pro id 设定 `1050000` 上下文和 `922000` 最大输入；OpenRouter 会为 `openai/gpt-5.6-sol`、`openai/gpt-5.6-terra` 和 `openai/gpt-5.6-luna` 设定 `1050000` 上下文。原生 Pool/Direct 的窗口遵循[保留 OpenAI 供应商策略](/reference/configuration/providers/#reserved-openai-providers)；同步后的目录会声明 `max`，同时保留 `xhigh` 的独立性。
 
 ```json
 {

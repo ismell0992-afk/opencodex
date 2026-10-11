@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 import {
   buildClaudeEnv as buildClaudeEnvWithIo,
   buildNativeClaudeEnv,
@@ -16,7 +17,7 @@ import {
 } from "../../src/cli/claude";
 import { buildClaudeContextWindows } from "../../src/claude/context-windows";
 import { commandInvocation } from "../../src/lib/win-exec";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LivenessIo, LiveProxy } from "../../src/server/proxy-liveness";
@@ -184,6 +185,23 @@ describe("ocx claude native fallback", () => {
     expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined();
   });
 
+  test("drops the picker label opencodex paired with a stripped alias slot, never a user label (#6926)", () => {
+    const env = buildNativeClaudeEnv(cfg(), {
+      ANTHROPIC_DEFAULT_OPUS_MODEL: "ocx-claude-native--gpt-6.1-sol",
+      ANTHROPIC_DEFAULT_OPUS_MODEL_NAME: "gpt-6.1-sol (native)",
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: "ocx-claude-native--gpt-6-luna",
+      ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME: "My helper",
+      ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-5-5",
+      ANTHROPIC_DEFAULT_SONNET_MODEL_NAME: "Sonnet (mine)",
+    }, { preBunAnthropicSlots: [] });
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBeUndefined();
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME).toBeUndefined();
+    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBeUndefined();
+    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME).toBe("My helper");
+    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("claude-sonnet-5-5");
+    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME).toBe("Sonnet (mine)");
+  });
+
   test("preserves an unrelated gateway, its user credential, and its host-managed guard", () => {
     for (const baseUrl of ["http://localhost:8080", "http://127.0.0.1:10100"]) {
       const env = buildNativeClaudeEnv(cfg({ port: 10100 }), {
@@ -231,7 +249,7 @@ describe("ocx claude native fallback", () => {
       expect(windows["ocx-claude-native--gpt-5.6-sol"]).toBe(272_000);
       expect(windows["claude-ocx-native--gpt-5.6-sol"]).toBe(272_000);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -269,7 +287,7 @@ describe("ocx claude native fallback", () => {
       expect(warnings).toHaveLength(1);
     } finally {
       console.warn = realWarn;
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 });
@@ -371,6 +389,31 @@ describe("ocx claude env assembly", () => {
     const env = buildClaudeEnv(cfg(), 10100, { ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-5" }, buildClaudeContextWindows([], [], undefined, {}), AUTH_PRESENT);
     expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("claude-sonnet-5");
     expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("claude-opus-5-5[1m]");
+    // Claude Code names its own first-party ids; only an alias slot gets a label.
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME).toBeUndefined();
+    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME).toBeUndefined();
+  });
+
+  test("an alias tier slot this launch writes carries its /model label (#6926)", () => {
+    const config = cfg({ claudeCode: { tierModels: { opus: "ocx-claude-native--gpt-6.1-sol", haiku: "claude-ocx-cursor--gpt-5.6-luna" } } });
+    const env = buildClaudeEnv(config, 10100, {}, {}, AUTH_PRESENT);
+    // The alias stays the submitted id; only the label is added.
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("ocx-claude-native--gpt-6.1-sol");
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME).toBe("gpt-6.1-sol (native)");
+    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("ocx-claude-cursor--gpt-5.6-luna");
+    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME).toBe("gpt-5.6-luna (cursor)");
+    // ANTHROPIC_SMALL_FAST_MODEL has no label variable in Claude Code.
+    expect(env.ANTHROPIC_SMALL_FAST_MODEL_NAME).toBeUndefined();
+
+    // A slot the user exported is theirs: no label is paired with a value opencodex did not write.
+    const userSlot = buildClaudeEnv(config, 10100, { ANTHROPIC_DEFAULT_OPUS_MODEL: "ocx-claude-cursor--other" }, {}, AUTH_PRESENT);
+    expect(userSlot.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("ocx-claude-cursor--other");
+    expect(userSlot.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME).toBeUndefined();
+
+    // A label the user exported wins over the generated one.
+    const userLabel = buildClaudeEnv(config, 10100, { ANTHROPIC_DEFAULT_OPUS_MODEL_NAME: "Sol" }, {}, AUTH_PRESENT);
+    expect(userLabel.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("ocx-claude-native--gpt-6.1-sol");
+    expect(userLabel.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME).toBe("Sol");
   });
 
   test("configured API key becomes the auth token (admission required)", () => {

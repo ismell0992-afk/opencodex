@@ -60,7 +60,9 @@ mutually exclusive on one machine:
 - **first-party** (opt-in, with account risk): Claude Desktop itself is left on claude.ai — login, Chat tab,
   connectors and remote control are untouched and no config-library profile is written. The apply
   writes only an authenticated `HTTPS_PROXY=http://opencodex:<token>@127.0.0.1:<port+100>` and `NODE_EXTRA_CA_CERTS=<config>/claude-intercept/ca.pem`
-  into the `env` block of Claude Code's `settings.json` (via `src/claude/intercept/settings.ts`),
+  into the `env` block of Claude Code's `settings.json` (via `src/claude/intercept/settings.ts`), plus a
+  loopback `NO_PROXY` bypass (`127.0.0.1,localhost,::1,0.0.0.0`) merged into any user value so local HTTP MCP servers
+  never reach the CONNECT-only proxy (#6936; removal restores the prior value from `opencodex-no-proxy.json`),
   creating the local authority first. Only the Claude Code process Desktop spawns for the Code tab
   (and its subagents, and any standalone `claude` CLI) reads that env, so only their
   `api.anthropic.com` traffic reaches the [Claude intercept pair](../runtime.md#claude-intercept-pair).
@@ -90,6 +92,7 @@ traffic through a local interception proxy, which Anthropic may treat as a terms
 owned settings are still observed; otherwise the field is `null`.
 `/api/sync` and roster-update auto-apply never write a gateway profile while the resolved mode is
 first-party; both re-resolve after model discovery before writing.
+Background refresh preserves the selected owned gateway profile's mode, refuses symlinked library, metadata, profile or backup paths and non-regular profiles, and rechecks admission, the selected owned metadata entry and its applied fingerprint in the no-follow writer's pre-rename hook; it leaves metadata and backup bytes unchanged.
 
 Mode switches establish the replacement before removing the previous connection. A failed
 first-party apply (disabled intercept, CA failure, unreadable settings or foreign env) preserves
@@ -214,6 +217,26 @@ HTTP/1.1 request per client request. Incoming requests and ordinary upstream res
 a 64 KiB header allowance for browser session cookies; Bun enforces the HTTP/2 inbound bound
 natively, counting name + value + 32 bytes per field and rejecting an oversized stream with
 `RST_STREAM ENHANCE_YOUR_CALM` before the request handler runs.
+The relay retains its 256-request aggregate ceiling across both HTTP versions and all sessions.
+Upload framing, not the method, determines whether input cleanup is needed: HTTP/2 headers
+without END_STREAM, or HTTP/1.1 transfer encoding or a positive Content-Length.
+Rejected unfinished uploads close after their empty reply's writable finishes; HTTP/2 uses the
+underlying stream's finish event rather than the compatibility response's finish event, which
+waits for both stream halves to close. HTTP/1.1 refusals advertise `Connection: close` only while input is unfinished.
+Early replies stop relaying unfinished input only after the downstream writable finishes or the
+response closes; upstream request closure alone does not prove a buffered reply was delivered.
+After a complete response, HTTP/2 closes only that stream with `RST_STREAM NO_ERROR` (RFC 9113
+§8.1), including a complete generated 502. Without a complete downstream response, cleanup uses
+`CANCEL` for a premature downstream close or an upstream close without a reply.
+HTTP/1.1 refusals, generated 502s and early replies advertise `Connection: close` only while input is unfinished; after the writable finishes,
+the listener unpipes the upstream upload, reads and discards remaining input, and ends the socket
+gracefully so queued response bytes flush. Errors and premature downstream closes still destroy
+the request. Draining adds no upload deadline or byte cap and does not wait for request-body
+completion before ending the response side. Body completion removes the input-cleanup listeners,
+leaving long-lived responses and SSE subscriptions independent of upload cleanup. Completed HTTP/1.1 uploads retain keep-alive on generated 502s and can reuse the same client socket.
+`tests/claude-integration/claude-picker-upload.test.ts` covers headers-only refusals on both
+protocols, byte-exact early replies under backpressure, completed uploads with SSE, cancellation,
+failure and shutdown cleanup, and healthy sibling streams.
 The picker CA (`picker-ca.ts`) carries critical
 name constraints permitting only `claude.ai` and excluding every IPv4 and IPv6 address. Its exportable
 signing identity is protected by the OS credential store and scoped to the canonical config directory;
@@ -229,7 +252,8 @@ application-access dialogs are controlled by macOS; restart or upgrade does not 
 `picker-ca-store.ts` owns the versioned OS credential service, canonical-config identity namespace,
 bounded exact-shape payload, full constrained CA profile, validity and P-256 private-key match validation.
 `picker-ca-persistence.ts` validates public `authority.json` and `authority-init.json` records under
-the canonical CA lock, rejecting symlinks and mismatched pre-open/path and descriptor identities. Initialization journals the config identity, new fingerprint and public
+the canonical CA lock, rejecting symlinks and mismatched pre-open/path and descriptor identities.
+Device and inode comparisons use bigint stats so distinct full-width file IDs cannot alias through numeric rounding. Initialization journals the config identity, new fingerprint and public
 predecessor before writing the credential, verifies readback, then commits metadata and publication;
 it removes the journal last. Recovery requires matching journal/store identity; missing initialized
 credentials, unavailable storage or inconsistent metadata fail closed without publishing a replacement.
@@ -266,7 +290,7 @@ intent and cannot repair the URL a running Desktop already pinned. The `claude.a
 certificate, streams every body and upgrade unchanged, and rewrites only the bootstrap response's
 local Code picker surfaces, `ccd` (what the Desktop Code tab reads) and its `code` fallback, never the
 remote `ccr` (`picker-bootstrap.ts`), failing open to the original bytes; the model list
-comes from a persisted snapshot (`picker-models.ts`), so a bootstrap never waits on discovery. Picker aliases carry `[1m]` only for authoritative windows of at least 1M, using the shared context marker helper with auto-context disabled. Sub-million opt-ins remain unmarked because the picker cannot guarantee the Desktop runner's compaction environment. A
+comes from a persisted snapshot (`picker-models.ts`), so a bootstrap never waits on discovery. Picker aliases carry `[1m]` for long windows (`src/claude/long-context.ts`: at least 1M, or at least the 829,800 default compact window), and Claude models on either Anthropic pool only at a genuine 1M. The picker cannot guarantee the Desktop runner's compaction environment, so an 872k route that outgrows its window relies on the `prompt is too long` envelope, which Claude Code compacts on; Desktop 3P `supports1m`/`prefer1m`, discovery `· 1M` rows and generated subagent markers use the same rule. `claudeCode.contextAccounting` (`src/types/config.ts`) is absent for the 1m default; the only stored value is `"200k"`, which stops automatic `[1m]` marking and `CLAUDE_CODE_AUTO_COMPACT_WINDOW` injection, drops Desktop 3P `prefer1m` while keeping `supports1m`, and still lists genuine 1M discovery rows. An explicit `[1m]` selector stays. `ocx claude config set --context-accounting` and `PUT /api/claude-code` write it (`"1m"` deletes the key). A
 CONNECT to claude.ai that arrives before the first refresh waits at most 3 s, then goes blind. A
 picker proxy bind failure only disables picker mode; a picker construction or start failure closes
 every socket the start had bound before rethrowing. Ordinary session cookies within the header
@@ -483,7 +507,7 @@ The explicit sync coordinator also accepts Cline CLI as a separate file integrat
 
 `claudeCode.stabilizePromptCache` is a default-off operator setting for
 [translated instruction stabilization](../data-planes/inbound-compat.md#opt-in-claude-instruction-stabilization).
-Config JSON preserves the boolean; only literal true activates the role-changing transform.
+Config JSON preserves the boolean; only literal true activates the transform, which drops recognized token footers and retains TaskCreate nudges as trailing user messages.
 The lightweight top-level CLI help counts Cline CLI among the fifteen registered export clients; registry parity remains covered by the client help and integration tests.
 
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
@@ -494,7 +518,7 @@ The account history response can include a [low-confidence effective capacity es
 
 Account quota surfaces use [safe probe diagnostics](../transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
-Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat removes effort only for an explicit empty declaration or no-reasoning model.
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat capability stripping applies only for an explicit empty declaration or no-reasoning model; an initial JEV null choice separately strips caller effort.
 
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](../runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 
@@ -524,6 +548,8 @@ Translated tool results in `src/claude/inbound.ts` retain nonempty string `tool_
 
 `src/claude/inbound-content-options.ts` strips Claude Code's leading `x-anthropic-billing-header:` line from a string system prompt or from the first text block of a system array before it becomes Responses `instructions`, dropping a block left empty. The line's `cch` value rotates per request, so keeping it made the translated prefix and the system-derived fallback `prompt_cache_key` change every turn (#6627). The match is anchored at the prompt start, like the Antigravity strip in `src/adapters/google.ts`; native Anthropic passthrough does not use this translation and keeps the client preamble. `tests/claude-integration/claude-inbound.test.ts` covers string and array systems, header-only blocks, later mentions and key stability.
 
+`src/claude/outbound.ts` carries a Responses provider's own `encrypted_content` in an `ocxr1:` `nat` envelope (`src/responses/reasoning-envelope.ts`) only when the serving attempt has committed and `src/server/responses/core-replay.ts` supplied a durable destination and credential owner. The `nat.tag` HMAC binds the exact blob to that owner and the installation's persisted salt. `src/claude/inbound.ts` restores the blob and item id only for the same client-facing model; each route binding verifies the tag against its effective endpoint, including `responsesPath`, and generation-bearing credential, then removes a mismatch from both the raw reasoning item and the parser's thinking-signature carrier before send. Missing owner or tag fails closed, including direct-forward credentials and OAuth generation changes. Native Anthropic ingress projects away every `nat` on both native branches, dropping blob-only blocks and leaving signed or visible-text fields intact. A thinking block that closes before serving commit has no `nat`. Translated bodies that reason request `include: ["reasoning.encrypted_content"]`; a body without reasoning does not. Anthropic `sig` and `red` envelopes keep their existing behavior. `tests/claude-integration/claude-native-reasoning-provenance.test.ts` covers route ownership and native projection.
+
 ## Claude Code picker descriptions
 
 `src/claude/model-info.ts` gives every readable (`idStyle: "readable"`, Claude Code CLI) `/v1/models` row a `description` that Claude Code 2.1.257 and later shows under the picker entry instead of the generic "From gateway": `Routed by OpenCodex to native <slug>` for native rows and `Routed by OpenCodex to <provider>/<model>` for routed rows. The 1M copy keeps the base description and a Fast sibling appends ` · Fast`. Desktop 3P rows keep the ModelInfo shape without a description. `src/claude/gateway-cache.ts` preserves a string `description` when it refreshes and rewrites the gateway-model cache and drops any other type. `tests/claude-integration/claude-model-info.test.ts` and `tests/claude-integration/claude-gateway-cache.test.ts` cover both.
@@ -531,6 +557,8 @@ Translated tool results in `src/claude/inbound.ts` retain nonempty string `tool_
 ## Claude Code routed aliases and the context window
 
 `src/claude/alias.ts` mints Claude Code CLI aliases as `ocx-claude-<provider>--<model>`, or `ocx-claude2-` with `~s`/`~t` escapes when the model id holds `/` or `~`. The id contains `claude`, which the picker requires, and does not start with `claude-`: Claude Code 2.1.278 accounts an unrecognized `claude-` id at 200k and applies `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to it only with `DISABLE_COMPACT=1`. Saved `claude-ocx-`/`claude-ocx2-` ids still decode, and `src/claude/context-windows.ts` and the connected-client map `readConnectedClaudeContextWindows` in `src/cli/claude.ts` register both spellings at the same window, and `decodeFablePickerAlias` in `src/server/claude-messages.ts` keeps a legacy native Fable picker value on the native passthrough, so a saved selector keeps its window lookup until it is re-picked. `effectiveModelEnv` emits a legacy selector configured in an OpenCodex slot in its current spelling (`currentClaudeAliasSpelling`), so Claude Code applies the window to it; a selection saved by Claude Code's own picker is outside OpenCodex's ownership and keeps 200k accounting until it is re-picked. `isProxyOnlyModelId` in `src/cli/claude.ts` treats all four prefixes as proxy-only for native fallback.
+
+Claude Code labels a tier row (Opus, Sonnet, Fable, Haiku) in `/model` as `ANTHROPIC_DEFAULT_<TIER>_MODEL_NAME`, then its own name for a first-party id, then the raw slot value, so an alias slot without a label shows the alias (#6926; read from the 2.1.296 binary). `claudeTierDisplayName` in `src/claude/context-windows.ts` derives the label from the alias in the spelling of the discovery `display_name` (`<slug> (native)`, `<model> (<provider>)`, ` · 1M`, and `(anthropic)` for the native-namespaced Fable picker alias); a trailing `--fast` stays in the model name, because without the catalog a Fast sibling cannot be told from a real `--fast` model, and a non-alias value gets none. The label is paired only with a slot opencodex wrote: `buildClaudeEnv` in `src/cli/claude.ts` labels a slot only when its `setDefault` wrote it, launchd system-env labels only tracked slots and sweeps a tracked label the config no longer produces, and the shell file exports the label inside the branch that exports the slot. A user-set slot or `_NAME` always wins, and `buildNativeClaudeEnv` drops a label equal to the one generated for a slot it strips.
 
 `claudeCode.maxContextTokens` injects only `CLAUDE_CODE_MAX_CONTEXT_TOKENS` on the `ocx claude`, launchd system-env and shell-hook paths; compact stays enabled and neither `DISABLE_COMPACT` nor `CLAUDE_CODE_AUTO_COMPACT_WINDOW` is injected beside it, whatever the value. A `DISABLE_COMPACT` an older release injected and tracked is unset by the system-env produced-key sweep while it still holds the injected `1`; a tracked key the user changed to another value is released from tracking without being deleted, and an untracked user value is never touched. `tests/claude-integration/claude-alias.test.ts`, `claude-context-windows.test.ts`, `claude-cli.test.ts` and `tests/server/system-env.test.ts` cover these.
 

@@ -9,6 +9,7 @@ Native steering follows [the shared WebSocket contract](../transports/streaming-
 
 Compatibility callers retain the public Responses ingress described by the
 [core module ownership](../transports/responses.md#core-module-ownership). This surface retains its existing behavior.
+Chat Completions and Messages release their owned translator budget on request abort even if no caller consumes the response body, following the [shared byte-accounting lifetime contract](../transports/byte-accounting.md#stream-buffer-accounting).
 
 Chat and Messages admission previews the [xAI OAuth Fast wire destination](../providers/xai-grok.md#grok-47-fast-lane-oauth)
 using the same policy as final Responses serialization. Native dispatch retains its own destination scope check.
@@ -186,7 +187,9 @@ one bounded event. EOF with an unterminated event and an event above the transla
 upstream failures, never successful partial completions. Provider-controlled structured error
 messages are redacted before either JSON or SSE reaches the client. The native path uses the same
 request-attempt logging, reset retry, same-key 429 replay, key rotation, usage extraction, and
-request-signal cancellation contracts as routed Responses transport. Because
+request-signal cancellation contracts as routed Responses transport. Native Combo children expose only
+their own prepaid initial send and settle it at final HTTP admission; unsent exits and shared retry
+ceilings follow [prepaid initial sends](../transports/responses-spend.md#prepaid-initial-sends). Because
 `src/server/chat-completions.ts` never enters Responses core,
 `src/server/chat-native.ts` repeats the pre-dispatch `selectProactiveApiKeyTransport`
 call before it binds the adapter; the pick remains inert unless a strategy is configured
@@ -219,7 +222,7 @@ caller values are forwarded like an explicit `session_id`, without principal sco
 promoted `x-session-id`. Original ingress headers and affinity computation are unchanged, as are
 custom and API-key destinations. No identity or originator is invented for marker-free requests.
 
-`src/server/caller-session-identity.ts` promotes validated `x-session-id` on HTTP Responses and Messages before turn admission in `src/server/index/serve-options.ts`. Explicit `session_id`, `session-id`, or `thread-id` presence wins, including empty values; managed Grok promotion runs first on Responses. The trimmed marker must start with an ASCII letter/digit, contain only letters, digits, dots, underscores, colons or hyphens, and stay within 128 characters. Loopback admission keeps it; authenticated admission scopes it with the trusted credential principal into an opaque SHA-256 identifier and skips promotion without that principal. Bodies and abort signals are preserved, and the original Request owns Bun timeout lookup. This provides continuity, not authorization or guaranteed cache hits. Existing explicit/Grok identities, Chat Completions, WebSocket frames, compact and count_tokens retain their behavior.
+`src/server/caller-session-identity.ts` promotes validated `x-session-id` on HTTP Responses, Messages and Chat Completions before turn admission in `src/server/index/serve-options.ts`. Explicit `session_id`, `session-id`, or `thread-id` presence wins, including empty values; managed Grok promotion runs first on Responses. The trimmed marker must start with an ASCII letter/digit, contain only letters, digits, dots, underscores, colons or hyphens, and stay within 128 characters. Loopback admission keeps it; authenticated admission scopes it with the trusted credential principal into an opaque SHA-256 identifier and skips promotion without that principal. Bodies and abort signals are preserved, and the original Request owns Bun timeout lookup. This provides continuity, not authorization or guaranteed cache hits. Existing explicit/Grok identities, WebSocket frames, compact and count_tokens retain their behavior.
 
 ## Chat conversation identity forwarding
 
@@ -229,7 +232,8 @@ and per-request `x-client-request-id` under their original names, and additional
 `session_id` from the first present alias, `session-id` then `thread-id`, when safe, using the
 [precedence and validation rules above](#http-caller-conversation-identity). Missing conversation
 identity stays missing; a shared prefix/cache key is not converted into a session. The direct-mode
-outbound contract is covered by `tests/responses/chat-conversation-affinity.test.ts`.
+outbound contract is covered by `tests/responses/chat-conversation-affinity.test.ts`. A promoted
+caller `x-session-id` arrives at this bridge already as `session_id` (see above).
 This transport contract does not prove a client's emission, Pool selection stability or cache hits.
 
 ## Chat streaming client with a JSON upstream result
@@ -314,14 +318,32 @@ its defaults and exclusions are owned by [Responses transport](../transports/res
 
 The provider summary default applies at Responses ingress; native Chat and Anthropic inbound preferences keep their existing handling. Raw content is never renamed to a summary. See [bridge contract](../providers/chat-compat.md).
 
+## Messages request-log correlation
+
+The Messages HTTP boundary in `src/server/index/serve-options.ts` publishes its generated
+request-log id in both `request-id` and `x-opencodex-request-id`. Native, translated, streamed,
+collected and logged refusal responses use the same id as the final request-history row.
+Stream headers precede final accounting; they identify the row owned by the turn, rather than
+attest to successful persistence. Authentication, origin, drain and active-turn rejections
+without a request-log owner, and count_tokens, receive no OCX correlation id.
+
+`src/server/messages-response-headers.ts` retains only an upstream `request-id` matching
+`req_[A-Za-z0-9_-]{1,128}` on native delivered results and upstream HTTP errors. At the final
+HTTP boundary, `src/server/index/startup-warnings.ts` moves this diagnostic value into
+`x-opencodex-upstream-request-id` and assigns the OCX id to `request-id`. Missing or nonconforming
+upstream ids are omitted; translated adapter ids are not inferred. The standard/custom OCX
+headers and the optional upstream header are exposed through CORS alongside existing names.
+`tests/claude-integration/messages-request-id-endpoint.test.ts` covers the protocol boundary;
+`tests/claude-integration/messages-request-id-headers.test.ts` covers header and stream identity.
+Responses retains its existing custom-header contract.
+
 ## Claude context rejection
 
-Claude Messages preserves the classified `context_length_exceeded` error through
-`src/claude/outbound.ts`, `src/protocols/encoders/messages.ts`, and
-`src/server/claude-messages.ts`. Streaming output carries one `invalid_request_error`
-terminal with that code; collected and failed-JSON responses return HTTP 400 without
-a retry hint. This mapping adds no recovery send or context pruning. Unknown upstream
-failures, replay refusal, and local translation-buffer limits retain their distinct handling.
+Claude Messages preserves the classified `context_length_exceeded` error (`src/claude/outbound.ts`, `src/protocols/encoders/messages.ts`, `src/server/claude-messages.ts`): one streaming `invalid_request_error` terminal, or HTTP 400 without a retry hint when collected or failed-JSON.
+`anthropicErrorBody` words that envelope as Anthropic does (`prompt is too long: ...`, counts only when the upstream states both), because Claude Code compacts reactively only on that wording; a throughput limit the classifier files under that code (`per minute`, `rate limit`, `quota`, `TPM`) keeps its text.
+The native Messages lane (`src/server/messages-native.ts`) does the same for a configured provider's own 400/413 or streamed `invalid_request_error` refusal without changing the envelope shape; the stream rewrite sits after the log tap so stall timing still reads raw bytes, and Anthropic pools skip it.
+This adds no recovery send or context pruning; replay refusal and translation-buffer limits keep their handling.
+History: `devlog/_plan/261009_claude_1m_default/010_prompt_too_long_envelope.md`.
 
 ## Claude affinity at final Go dispatch
 
@@ -344,8 +366,10 @@ final native affinity, and shared-system keys do not provide either conversation
 
 `src/claude/inbound.ts` reads only literal `claudeCode.stabilizePromptCache: true` from
 its existing configuration argument. The default is off for every translated Messages caller.
-`src/claude/inbound-cache-stabilize.ts` relocates only exact single-line trailing unfenced harness notices
-into a trailing user input message; unmatched and fenced text is preserved, including an open
+`src/claude/inbound-cache-stabilize.ts` peels only exact single-line trailing unfenced harness notices.
+Recognized `<total_tokens>N tokens left</total_tokens>` footers are dropped, including repeated footers;
+TaskCreate nudges retain their trailing user input message. A footer-only suffix adds no input item,
+so token footers do not introduce a user turn after a function output. Unmatched and fenced text is preserved, including an open
 fence through EOF. Native passthrough never enters this translator. Without opt-in the original
 system-parts cache-key derivation remains unchanged; with opt-in the metadata-less key uses
 stabilized instructions. Metadata-derived keys retain their existing derivation. This configuration
@@ -492,6 +516,8 @@ Unicode pattern normalization uses [copy-on-write traversal](../transports/byte-
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
 
 The [compaction routing override](../transports/responses-failover.md#compaction-routing-overrides) requires original Responses ingress; translated Chat and Messages calls retain their own routing.
+
+Native Messages and translated Anthropic requests share [revoked-token recovery](../providers/anthropic-account-pool.md#revoked-oauth-access-token-recovery); only pre-output recovery may send a sibling.
 
 Managed native Anthropic OAuth metadata follows [the native Messages binding contract](protocol-paths.md#managed-native-messages): the serving credential's provider UUID replaces only recognized account metadata, with each attempt rebuilt from the source.
 

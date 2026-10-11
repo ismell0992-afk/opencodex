@@ -1,10 +1,10 @@
 ---
 title: Интеграции
-description: Подключайте opencodex к OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo и Factory Droid из дашборда — отдельный переключатель для каждого клиента и резервная копия перед каждой записью.
+description: Подключайте opencodex к OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo, Command Code и Factory Droid из дашборда — отдельный переключатель для каждого клиента и резервная копия перед каждой записью.
 ---
 
 Вкладка **Подключение** записывает блок провайдера opencodex в собственный файл
-конфигурации клиента и при необходимости удаляет его. Так работают семнадцать
+конфигурации клиента и при необходимости удаляет его. Так работают восемнадцать
 клиентов, у каждого свой переключатель:
 
 | Клиент | Файл конфигурации | Формат | Когда изменение начинает действовать | Учётные данные |
@@ -25,6 +25,7 @@ description: Подключайте opencodex к OpenCode, Pi, OMP, Hermes, Open
 | omo | `~/.omo/agent/models.json` | JSON | в новых сессиях | заглушка для loopback |
 | Cline CLI | `~/.cline/data/settings/providers.json` и соседний `models.json` | пара JSON | после остановки и повторного запуска Cline | заглушка для loopback |
 | Kilo | первый существующий файл среди `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json` и `config.json` в `~/.config/kilo` (`XDG_CONFIG_HOME` переносит каталог; если файлов нет, создаётся `kilo.jsonc`) | JSONC | в новых сессиях | `OPENCODEX_KILO_API_KEY` |
+| Command Code | `~/.commandcode/providers.json` (в Windows при использовании домашнего каталога по умолчанию: использовать `HOME ?? USERPROFILE`, только если значение не пустое, не состоит из пробелов и является абсолютным путём Windows, иначе `homedir()`; отдельно переданный домашний каталог сохраняется; добавить `.commandcode\providers.json`) | JSON | при следующем запуске Command Code | нет — loopback без ключа (`apiKey: false`) |
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` в Windows) | JSON | сразу при изменении файла | loopback без ключа |
 
 Создаваемые каталоги включают только модели, включённые в настройках каждого
@@ -457,6 +458,8 @@ HTTP 200 при успешной массовой операции и HTTP 207 �
 
 
 ## ZCode 3.14 и более поздние версии
+
+Эти пути указаны по умолчанию. Абсолютный `dataBaseDir` в `~/.zcode/v2/setting.json`, который всегда остаётся в домашнем каталоге по умолчанию, переносит хранилище в `<dataBaseDir>/.zcode/v2/provider_config.json`. `ZCODE_DATA_DIR` задаёт сам корень `.zcode` и имеет приоритет над настройкой; `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` имеет приоритет для файла провайдеров. Нечитаемая, некорректная или относительная настройка блокирует новое применение и обновление. Существующие записи владения и восстановления сохраняются. См. [правила путей и восстановления на английском](https://opencodex.me/guides/integrations/#zcode-314-and-later).
 
 Начиная с ZCode 3.14 пользовательские провайдеры хранятся в
 `~/.zcode/v2/provider_config.json`, а `~/.zcode/v2/config.json` используется

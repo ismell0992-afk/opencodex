@@ -172,7 +172,7 @@ non-empty `model`. `input` may be a string or an array of Responses items.
 
 ### Caller conversation header
 
-For HTTP `POST /v1/responses` and `POST /v1/messages`, a client can send a stable
+For HTTP `POST /v1/responses`, `POST /v1/messages`, and `POST /v1/chat/completions`, a client can send a stable
 `x-session-id` for each conversation. When no `session_id`, `session-id`, or `thread-id`
 header is present, opencodex promotes the marker to `session_id`. Managed Grok identity
 on Responses takes precedence too. Even an empty explicit header suppresses promotion.
@@ -186,7 +186,7 @@ requests without a trusted principal are left unchanged.
 
 Use distinct markers for distinct conversations. This preserves conversation continuity
 for downstream consumers, but does not guarantee an upstream cache hit or measured savings.
-Chat Completions, WebSocket frames, compact, and count_tokens do not use this promotion.
+WebSocket frames, compact, and count_tokens do not use this promotion.
 
 On canonical ChatGPT-backed Responses dispatch, a non-empty explicit `session_id` wins.
 Otherwise, the first non-empty alias among `session-id`, then `thread-id`, supplies
@@ -355,6 +355,11 @@ When available, `input_tokens_details` can also include `cache_write_tokens`. Th
 detail objects are a compatibility guarantee for strict Responses clients; zero can mean "not
 reported," not necessarily "the provider performed no such work."
 
+For Anthropic upstreams, a reported `usage.output_tokens_details.thinking_tokens` is preserved as
+Responses `output_tokens_details.reasoning_tokens` and Chat `completion_tokens_details.reasoning_tokens`,
+for JSON and streaming replies. It is already included in the output-token total, not added again;
+missing or invalid detail is not estimated from visible thinking text. See [Anthropic's usage contract](https://platform.claude.com/docs/en/build-with-claude/thinking-steering-and-cost).
+
 ### Correlating a response with its request log
 
 Every admitted HTTP Responses reply carries an `x-opencodex-request-id` header holding a
@@ -367,8 +372,23 @@ named in `Access-Control-Expose-Headers`, which is what lets browser JavaScript 
 cross-origin — a custom `x-` header is otherwise invisible to `response.headers.get()` even when
 it is on the wire.
 
-Responses rejected at authentication or origin admission never reach this wrapper and carry no id,
-so a missing header means the request was refused before it was logged.
+Responses rejected at authentication or origin admission never reach this wrapper and carry no id.
+
+Logged `POST /v1/messages` replies carry the same OCX request-history id in **both**
+`request-id` and `x-opencodex-request-id`. This applies to native and translated replies,
+streaming and JSON, and logged refusals. Claude Code can use its persisted `requestId`
+metadata from `request-id` to join future transcripts to that OCX history row.
+
+On native delivered replies and upstream HTTP errors, an opaque Anthropic upstream
+`request-id` matching `req_[A-Za-z0-9_-]{1,128}` is preserved separately as
+`x-opencodex-upstream-request-id`. It is a provider diagnostic id, not an OCX ledger key.
+Missing or nonconforming upstream ids, and translated adapter ids, are omitted. These
+response headers are readable through CORS alongside existing exposed headers.
+
+No OCX id is added to authentication, origin, drain or active-turn refusals that have no
+request-log owner, or to count_tokens. Streaming headers identify the turn's eventual
+history row; they do not attest that final usage has already been saved. Old transcripts
+without a shared key remain unlinked; timestamp or token similarity is not an exact join.
 
 ### WebSocket upgrade on the same path
 

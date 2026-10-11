@@ -113,8 +113,12 @@ async function logs(argv: string[], deps: ObserveStreamDeps): Promise<number> {
     return followLogs({ query: new URLSearchParams(query(params)), limit, jsonl: wantsJsonl, events: wantsEvents, formatRow: formatLog }, deps);
   }
   const data = await runtimeRequest(`/api/logs${query(params)}`, {}, deps);
+  const rows = logRows(data);
+  if (!wantsJson && !wantsJsonl && rows.length === 0 && [provider, model, status, conversationId, account].some(Boolean)) {
+    console.log("No log entry matched the filters.");
+  }
   if (wantsJson) printData(data, true);
-  else for (const row of logRows(data)) {
+  else for (const row of rows) {
     if (wantsJsonl) console.log(JSON.stringify(row));
     else console.log(formatLog(row));
   }
@@ -129,7 +133,9 @@ async function explain(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   rejectArgs(args, USAGE);
   const encoded = encodeURIComponent(requestId);
   const result = await runtimeRequest(`/api/request-history/${encoded}/route-decision`, {}, deps);
-  printData(result, wantsJson, wantsJson ? undefined : [JSON.stringify(result, null, 2)]);
+  // One entry per line: printData escapes control characters per entry, so a single
+  // pretty-printed string would print its line breaks as literal `\x0a`.
+  printData(result, wantsJson, wantsJson ? undefined : JSON.stringify(result, null, 2).split("\n"));
 }
 
 async function rebuildIndex(argv: string[], deps: RuntimeApiDeps): Promise<void> {

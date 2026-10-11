@@ -52,11 +52,10 @@ import { routeConcreteModel, comboRouteDecisionTrace } from "../../router";
 import { memoryModelRouteReason } from "./memory-models";
 import { poolAccountProviderLabel } from "../../providers/label";
 import { getAccountSet } from "../../oauth/store";
+import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
 import {
+  anthropicRoutingFor,
   formatAnthropicProviderForLog,
-  getAnthropicAccountHealthSnapshot,
-  getAnthropicPoolRetryAfterSeconds,
-  getEligibleAnthropicAccounts,
 } from "../../oauth/anthropic-routing";
 import { codexAccountLogLabel } from "../../codex/account-label";
 import { codexQuotaScopeForModel, getCodexQuotaHealthSnapshot } from "../../codex/routing";
@@ -81,6 +80,7 @@ import {
   buildComboChildHeaders,
   createChildPassthroughCallbackGate,
   consumeComboFailure,
+  isLateAttributionRefusal,
 } from "./core-combo-failure";
 import {
   linkRequestSessionLane,
@@ -101,7 +101,7 @@ import {
   markEagerRelaySseResponse,
 } from "../relay";
 import { preflightComboStreamResponse } from "./combo-stream-preflight";
-import { streamingContextOverflowResponse, jsonContextOverflowResponse } from "./context-overflow";
+import { streamingContextOverflowResponse, jsonContextOverflowResponse, lateAttributionLimitResponse } from "./context-overflow";
 import { mandatoryResponsesReasoningReplayUnavailable } from "./core-replay";
 import { settleOperatorReplacement } from "../../lib/upstream-retry";
 import { createComboProtocolLanes, dispatchNativeComboChild } from "./core-combo-native";
@@ -118,10 +118,11 @@ export const COMBO_TARGET_BASE_SENDS = CODEX_TEXT_GUARDED_BUDGET_POLICY.baseSend
 
 function cooledPoolAccountLabel(config: OcxConfig, providerName: string, modelId: string, label: string | undefined): string | undefined {
   if (!label) return undefined;
-  if (providerName === "anthropic") {
-    const matches = getAccountSet("anthropic")?.accounts.filter(account =>
-      formatAnthropicProviderForLog("anthropic", account.id) === label) ?? [];
-    return matches.length === 1 && getAnthropicAccountHealthSnapshot(matches[0]!.id) ? label : undefined;
+  const instance = configuredAnthropicInstance(config, providerName);
+  if (instance && config.providers[providerName]?.authMode === "oauth") {
+    const matches = getAccountSet(instance)?.accounts.filter(account =>
+      formatAnthropicProviderForLog(instance, account.id) === label) ?? [];
+    return matches.length === 1 && anthropicRoutingFor(instance).getAnthropicAccountHealthSnapshot(matches[0]!.id) ? label : undefined;
   }
   const provider = config.providers[providerName];
   if (!provider || !isCanonicalOpenAiForwardProvider(provider)) return undefined;
@@ -152,12 +153,13 @@ export function isAnthropicPoolLocalRefusal(
   failedAccount: string | undefined,
   now = Date.now(),
 ): boolean {
-  return providerName === "anthropic"
+  const instance = configuredAnthropicInstance(config, providerName);
+  return instance !== undefined
     && config.providers[providerName]?.authMode === "oauth"
     && status === 429
     && failedAccount === undefined
-    && getEligibleAnthropicAccounts(now).length === 0
-    && getAnthropicPoolRetryAfterSeconds(now) !== null;
+    && anthropicRoutingFor(instance).getEligibleAnthropicAccounts(now).length === 0
+    && anthropicRoutingFor(instance).getAnthropicPoolRetryAfterSeconds(now) !== null;
 }
 
 /**
@@ -713,30 +715,35 @@ export async function executeComboResponses(
   while (pick) {
     if (options.abortSignal?.aborted) return clientCancelledResponse();
     const firstComboTarget = comboTargetsDispatched === 0;
-    // The first target seeds the ledger's target identity and charges nothing; every later one
-    // is a real transition, refused once the declared hops, the alternate-target ledger or the
-    // request total are spent. `countedExternally` is required: the child charges its own
-    // physical sends, and charging here as well would halve the cap without saying so.
+    const targetRoute = routeConcreteModel(config, `${pick.target.provider}/${pick.target.model}`);
+    // The inherited spend tracker observes this parent log, before the child has its own label.
+    logCtx.spendPoolId = targetRoute.providerName;
+    // Derive the target's allowance before booking its initial send; the booking occupies it.
+    const targetSendBudget = comboSendScope
+      ? comboTargetSendBudget(comboSendScope, combo.targets.length - 1 - comboTargetsDispatched)
+      : options.sendBudget;
+    // Every target prepays one send. Only its child may consume that booking; later targets
+    // remain bounded by the shared total, transition ledger and per-target holdback.
+    // `countedExternally` is required: the child charges its own physical sends against this
+    // booking through the exact permit, and charging here as well would halve the cap.
     const hopDecision = comboSendScope?.reserveDispatch({
       sendClass: firstComboTarget ? "initial" : "combo-failover",
       targetKey: `${pick.target.provider}/${pick.target.model}`,
       countedExternally: true,
     });
-    if (hopDecision && hopDecision.allowed) hopDecision.permit.use();
-    else if (hopDecision && firstComboTarget) {
+    if (hopDecision && !hopDecision.allowed && firstComboTarget) {
       // A refused initial reservation authorizes no child send and has no upstream failure to return.
       return formatErrorResponse(429, SEND_BUDGET_EXHAUSTED_CODE, "request send budget exhausted before combo dispatch");
     }
-    else if (hopDecision) {
+    else if (hopDecision && !hopDecision.allowed) {
       // Out of budget is not this target's failure. The established exhaustion contract is to
       // return the last real upstream answer with its status, headers and any quota body
       // intact rather than to mint a synthetic error, and a later target only exists because
       // an earlier one already recorded one.
       return exhaustedFailure();
     }
-    const targetSendBudget = comboSendScope
-      ? comboTargetSendBudget(comboSendScope, combo.targets.length - 1 - comboTargetsDispatched)
-      : options.sendBudget;
+    const initialSend = hopDecision?.allowed ? { permit: hopDecision.permit, producerOwned: false } : undefined;
+    try {
     comboTargetsDispatched += 1;
     const childLog: RequestLogContext = {
       model: pick.target.model,
@@ -744,7 +751,6 @@ export async function executeComboResponses(
       ...(logCtx.conversationId ? { conversationId: logCtx.conversationId } : {}),
       ...(logCtx.surface ? { surface: logCtx.surface } : {}),
     };
-    const targetRoute = routeConcreteModel(config, `${pick.target.provider}/${pick.target.model}`);
     const targetReasoningEfforts = supportedLadderFor({
       provider: targetRoute.provider,
       modelId: targetRoute.modelId,
@@ -761,7 +767,7 @@ export async function executeComboResponses(
       initialJevDecision ? initialJevDecision.effort : comboDefaultEffort(config, comboId),
       initialJevDecision?.effort === null ? [] : targetReasoningEfforts,
       combo.reasoningEffortMode,
-      initialJevDecision !== undefined && initialJevDecision.effort !== null ? "force" : combo.defaultEffortMode,
+      initialJevDecision ? (initialJevDecision.effort === null ? "fallback" : "force") : combo.defaultEffortMode,
     );
     if (initialJevDecision) {
       delete childBody.service_tier;
@@ -857,10 +863,11 @@ export async function executeComboResponses(
           && targetEligible(target)
           && !isComboTargetInCooldown(comboId, target),
         );
-      const nativeChild = protocolLanes?.nativeChild(pick.target, targetRoute, targetSendBudget);
+      const nativeChild = protocolLanes?.nativeChild(pick.target, targetRoute, targetSendBudget, initialJevDecision);
       response = nativeChild ? await dispatchNativeComboChild({
         source: options.protocolSource!,
         plan: nativeChild,
+        comboDispatchPermit: hopDecision?.allowed ? hopDecision.permit : undefined,
         logCtx,
         childLog,
         attempt,
@@ -886,6 +893,8 @@ export async function executeComboResponses(
         // parent arrived with.
         sendBudget: targetSendBudget,
         comboAttempt: true,
+        comboInitialSend: initialSend,
+        comboDispatchPermit: hopDecision?.allowed ? hopDecision.permit : undefined,
         comboReplaySnapshot,
         deferCodexResetDerivedCooldown,
         // Attempt-relative TTFT is recorded HERE (not via childLog.firstOutputMs — a later
@@ -904,8 +913,8 @@ export async function executeComboResponses(
         onNativePassthroughCancel: callbackGate.onCancel,
         onResponseComplete: callbackGate.onResponseComplete,
       });
-      // Native Chat rebuilds its own body and does not apply the initial JEV effort.
-      restoreOriginalRequestedEffort(childLog, nativeChild ? undefined : initialJevDecision?.effort);
+      // Both lanes applied the initial choice before provider pins/caps; retain those transitions.
+      restoreOriginalRequestedEffort(childLog, initialJevDecision?.effort);
     } catch (error) {
       callbackGate.discard();
       if (options.abortSignal?.aborted) {
@@ -999,6 +1008,10 @@ export async function executeComboResponses(
       retainCancelledAttempt();
       return clientCancelledResponse();
     }
+    // A member's local late-attribution refusal reaches the client only as the literal constant
+    // envelope: swap the response, keep every classification input, and skip the overflow rewrite.
+    const lateAttributionRefusal = isLateAttributionRefusal(failure);
+    if (lateAttributionRefusal) failure = { ...failure, response: lateAttributionLimitResponse() };
     sealRequestAttemptIdentity(
       attempt,
       childLog.provider,
@@ -1039,7 +1052,7 @@ export async function executeComboResponses(
       });
     const wantsStream = (rawBody as { stream?: unknown } | null)?.stream === true;
     // Local byte admission has its own diagnostic; do not relabel it as an upstream refusal.
-    const classifyOverflow = failure.response.status === 413
+    const classifyOverflow = failure.response.status === 413 && !lateAttributionRefusal
       && (wantsStream || (failure.upstreamCode !== "outbound_body_too_large"
         && failure.upstreamCode !== "translation_buffer_limit"));
     lastFailureClassifiesOverflow = classifyOverflow;
@@ -1179,6 +1192,11 @@ export async function executeComboResponses(
       }
       // Waiting or recovery may have observed cancellation after the check above.
       if (options.abortSignal?.aborted) return clientCancelledResponse();
+    }
+    } finally {
+      // External receipts make release a no-op after real work. runTurn owns its asynchronous
+      // producer; core transfers cleanup there before returning a streaming response.
+      if (!initialSend?.producerOwned) initialSend?.permit.release();
     }
   }
   const failure = exhaustedFailure();

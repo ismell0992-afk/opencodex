@@ -21,7 +21,8 @@ import { normalizeAnthropicImages } from "../adapters/anthropic-image-normalize"
 import { createToolCallIdAllocator } from "../adapters/tool-call-id";
 import { openAIChatSerializesThinking } from "../adapters/openai-chat/messages";
 import { messagesToResponsesTranslation } from "../protocols/codecs/messages";
-import { AnthropicRequestError, DesktopModelMappingUnavailableError, extractOcxEffortDirective, extractOcxRouteDirective, resolveInboundModel, type ClaudeCacheKeySource } from "../claude/inbound";
+import { AnthropicRequestError, DesktopModelMappingUnavailableError, extractOcxEffortDirective, extractOcxRouteDirective, nativeAnthropicProjection, resolveInboundModel, type ClaudeCacheKeySource } from "../claude/inbound";
+import { nativeReasoningTag, type NativeReasoningOwner } from "../responses/reasoning-replay-cache";
 import { isKnownDesktop3pModelId, resolveDesktop3pAlias } from "../claude/desktop-3p";
 import { resolveAlias, claudeCodeNativeAlias, legacyAliasForNative } from "../claude/alias";
 import { recordDesktopRequest } from "../claude/desktop-health";
@@ -41,6 +42,7 @@ import {
 } from "../lib/upstream-retry";
 import { resolveClientRetryAfter } from "../lib/retry-after";
 import { anthropicRateLimitHeaders } from "./anthropic-rate-limit-headers";
+import { upstreamMessagesRequestIdHeaders } from "./messages-response-headers";
 import {
   anthropicErrorBody,
   anthropicErrorResponse,
@@ -80,7 +82,9 @@ import { upstreamWireForAdapter } from "../protocols/contract";
 import { createProtocolEnvelope, type ProtocolEnvelope } from "../protocols/envelope";
 import { featuresFromMessagesBody, type ProtocolFeature } from "../protocols/features";
 import { credentialDomainFor, messagesBodyHasOpaqueState } from "../protocols/opaque-state";
-import { hasAnthropicFailoverQuorum, anthropicSessionKeyFromParts } from "../oauth/anthropic-routing";
+import { anthropicRoutingFor, anthropicSessionKeyFromParts } from "../oauth/anthropic-routing";
+import { configuredAnthropicInstance } from "../providers/anthropic-instance";
+import { messagesSelectorTargetsSecondaryInstance, messagesSecondaryInstanceUnavailable } from "./messages-native-selector";
 import { checkRepresentable, unrepresentableMessage } from "../protocols/guard";
 import { requestPathForLane } from "../protocols/path";
 import { resolveApiSurfaceSettings, resolveProtocolSettings } from "../protocols/settings";
@@ -244,6 +248,7 @@ function wantsNativePassthrough(
 ): model is string {
   if (cc?.nativePassthrough === false) return false;
   if (typeof model !== "string" || !/^(claude|anthropic)/i.test(model)) return false;
+  if (messagesSelectorTargetsSecondaryInstance(config, model, cc)) return false;
   // Authorization and x-api-key both belong to the upstream on this branch. An exposed listener
   // therefore requires the dedicated admission header even though the routed Messages surface
   // keeps accepting all three legacy admission forms.
@@ -631,7 +636,10 @@ async function anthropicNativePassthrough(
   const upstream = result.upstream;
 
   const contentType = upstream.headers.get("content-type") ?? "application/json";
-  const rateLimitHeaders = anthropicRateLimitHeaders(upstream.headers);
+  const rateLimitHeaders = {
+    ...anthropicRateLimitHeaders(upstream.headers),
+    ...(pathname === "/v1/messages" ? upstreamMessagesRequestIdHeaders(upstream.headers) : {}),
+  };
   const bodyGuard = resolvePassthroughBodyGuard(config, req.signal);
   if (upstream.ok && contentType.includes("text/event-stream") && upstream.body) {
     return new Response(tapAnthropicSseForLog(upstream.body, logCtx, finalize, bodyGuard), {
@@ -834,6 +842,7 @@ export async function handleClaudeMessages(
     return finalizeTranslatorBudgetResponse(
       await handleClaudeMessagesWithBudget(req, config, logCtx, translatorBudget, logIds, requestPolicy, ingress),
       translatorBudget,
+      req.signal,
     );
   } catch (error) {
     translatorBudget.dispose();
@@ -869,6 +878,9 @@ async function handleClaudeMessagesWithBudget(
   let anthropicBody: unknown;
   let internalBody: Rec;
   let cacheKeySource: ClaudeCacheKeySource = null;
+  let nativeReasoningReplay: ReadonlyMap<string, string> | undefined;
+  const nativeReasoningMint: { owner?: NativeReasoningOwner } = {};
+  let nativeProjectionOnlyError: AnthropicRequestError | undefined;
   let effortOverride: string | null = null;
   let effortRow: ParsedEffortRowId | null = null;
   let fastRow: ParsedFastRowId | null = null;
@@ -959,7 +971,20 @@ async function handleClaudeMessagesWithBudget(
     if (!effortRow && !fastRow && isRec(anthropicBody) && wantsNativePassthrough(req, config, requestPolicy, anthropicBody.model, cc)) {
       markProtocolEntry(logCtx, { inbound: "messages", lane: "native", features: messagesFeatures });
       recordProtocolShadowPlan(logCtx, config, { inbound: "messages", model: requestedModel });
-      return await anthropicNativePassthrough(req, config, logCtx, logIds, anthropicBody, "/v1/messages");
+      let projectedBody: Rec;
+      try {
+        projectedBody = nativeAnthropicProjection(anthropicBody, translatorBudget);
+      } catch (err) {
+        if (!isTranslatorBudgetExceededError(err)) throw err;
+        if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 413, { closeReason: "non_stream" });
+        return anthropicErrorResponse(413, "request translation buffer exceeded the safe limit", "request_too_large", "translation_buffer_limit");
+      }
+      return await anthropicNativePassthrough(req, config, logCtx, logIds, projectedBody, "/v1/messages");
+    }
+    if (isRec(anthropicBody) && typeof anthropicBody.model === "string"
+      && messagesSecondaryInstanceUnavailable(config, anthropicBody.model, cc)) {
+      if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 401, { closeReason: "non_stream" });
+      return anthropicErrorResponse(401, "Configured Anthropic OAuth instance is unavailable", "authentication_error");
     }
     // Only Anthropic holds message-thread state; the error makes Claude Code resend the full turn.
     if (carriesMessageThread(anthropicBody)) {
@@ -1009,7 +1034,19 @@ async function handleClaudeMessagesWithBudget(
       };
       delete anthropicBody.thinking;
     }
-    const translation = messagesToResponsesTranslation(anthropicBody, cc, translatorBudget);
+    let translation;
+    try {
+      translation = messagesToResponsesTranslation(anthropicBody, cc, translatorBudget);
+    } catch (err) {
+      // A native Messages route can discard an undecodable proxy envelope. Keep the
+      // original error for any route that ultimately translates to Responses.
+      if (!(err instanceof AnthropicRequestError) || err.message !== "malformed ocxr1 reasoning signature"
+        || !isRec(anthropicBody)) throw err;
+      const projected = nativeAnthropicProjection(anthropicBody, translatorBudget);
+      if (projected === anthropicBody) throw err;
+      translation = messagesToResponsesTranslation(projected, cc, translatorBudget);
+      nativeProjectionOnlyError = err;
+    }
     internalBody = translation.body;
     // The Anthropic translator builds its body from model/input/store/stream plus sampling
     // fields only, so the caller intent is applied to the TRANSLATED body rather than the
@@ -1017,6 +1054,7 @@ async function handleClaudeMessagesWithBudget(
     if (fastRow) internalBody.service_tier = "priority";
     translatorBudget.chargeRetained(jsonUtf8Bytes(internalBody), { kind: "request_copies" });
     cacheKeySource = translation.cacheKeySource;
+    nativeReasoningReplay = translation.nativeReasoningReplay;
   } catch (err) {
     const overflow = isTranslatorBudgetExceededError(err);
     const unavailable = err instanceof DesktopModelMappingUnavailableError;
@@ -1148,15 +1186,25 @@ async function handleClaudeMessagesWithBudget(
 
   // PF-08: a managed-key Anthropic route sends its Messages body natively. The caller-forward
   // passthrough above was decided on the caller's own credential and never reaches this point.
+  const settledInstance = configuredAnthropicInstance(config, settledRoute?.providerName);
+  if (settledRoute?.providerName === "anthropic2" && settledRoute.provider.authMode === "oauth" && !settledInstance) {
+    if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 401, { closeReason: "non_stream" });
+    return anthropicErrorResponse(401, "Configured Anthropic OAuth instance is unavailable", "authentication_error");
+  }
   const nativeSelector: NativeMessagesSelector = {
     effortRow: !!effortRow, fastRow: !!fastRow, routeSelector: String(internalBody.model ?? ""), claudeCode: cc,
     // PF-10: a stored second OAuth account turns on the bridge's rotation, so it stays there.
-    ...(settledRoute?.provider.authMode === "oauth" ? { oauthFailoverQuorum: hasAnthropicFailoverQuorum() } : {}),
+    ...(settledRoute?.provider.authMode === "oauth" && settledInstance
+      ? { oauthFailoverQuorum: anthropicRoutingFor(settledInstance).hasAnthropicFailoverQuorum() } : {}),
   };
   const nativeDecline = settledRoute && isRec(anthropicBody)
     ? nativeMessagesDeclineReason(settledRoute, anthropicBody, config, nativeSelector)
     : "rollout-disabled";
   const nativeMessagesRoute = settledRoute && nativeDecline === undefined ? settledRoute : undefined;
+  if (nativeProjectionOnlyError && !nativeMessagesRoute) {
+    if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 400, { closeReason: "non_stream" });
+    return anthropicErrorResponse(400, nativeProjectionOnlyError.message, "invalid_request_error");
+  }
   // With the switch on, a declined route says why on its bridge mark, as native Chat does.
   if (nativeDecline && nativeDecline !== "rollout-disabled") {
     markProtocolEntry(logCtx, {
@@ -1195,7 +1243,7 @@ async function handleClaudeMessagesWithBudget(
     let nativeBody: Rec;
     try {
       // Built from the source envelope when there is one, after the managed-client steps above.
-      nativeBody = envelope ? envelope.freshBody() : anthropicBody as Rec;
+      nativeBody = nativeAnthropicProjection(envelope ? envelope.freshBody() : anthropicBody as Rec, translatorBudget);
     } catch (err) {
       if (!isTranslatorBudgetExceededError(err)) throw err;
       if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 413, { closeReason: "non_stream" });
@@ -1300,6 +1348,8 @@ async function handleClaudeMessagesWithBudget(
     // Without this the replay would look native and a Responses-scoped wire default
     // would fire, disagreeing with the pre-flight decision above.
     inboundWire: "anthropic",
+    nativeReasoningReplay,
+    nativeReasoningMint,
     claudeGoAffinity: { sessionLane: claudeGoSessionLane },
     claudeNativeSessionId,
     stripClaudeMainAuthForNoncanonicalForward: true,
@@ -1381,6 +1431,7 @@ async function handleClaudeMessagesWithBudget(
   if (contentType.includes("text/event-stream") && response.body) {
     const anthropicSse = responsesSseToAnthropicSse(response.body, requestedModel, {
       translatorBudget,
+      nativeReasoningTagFor: blob => nativeReasoningTag(nativeReasoningMint.owner, blob),
       // Only a floor, and only for the first frame: an upstream that reports usage early wins
       // over it inside the translator, and the terminal `message_delta` carries the
       // authoritative count either way (#4857).
@@ -1450,7 +1501,7 @@ async function handleClaudeMessagesWithBudget(
   }
   let message: Rec;
   try {
-    message = responsesJsonToAnthropicMessage(json, requestedModel, translatorBudget);
+    message = responsesJsonToAnthropicMessage(json, requestedModel, translatorBudget, blob => nativeReasoningTag(nativeReasoningMint.owner, blob));
   } catch (err) {
     if (!isTranslatorBudgetExceededError(err)) throw err;
     return anthropicErrorResponse(413, "upstream translation buffer exceeded the safe limit", "request_too_large", "translation_buffer_limit");

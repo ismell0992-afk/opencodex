@@ -1176,6 +1176,10 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
       "openai/o3-pro": ["text"],
     },
     noVisionModels: ["openai/o3-pro"],
+    // #6877: on the Responses wire OpenGateway answers 400 once history replays native
+    // custom_tool_call/custom_tool_call_output items (Codex code-mode exec), and accepts the
+    // same request after the custom tool is lowered to a function. Same contract as xAI.
+    supportsResponsesCustomTools: false,
     // Chat is the broad wire (77/80 active rows). o3-pro is Responses-only, on all
     // inbounds. Only the two live-verified Sionic models bypass translation for Codex.
     // Other OpenAI/Anthropic/Gemini rows stay on Chat until their Responses tool replay
@@ -1464,7 +1468,6 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     models: [...QODER_GLOBAL_MODELS],
     liveModels: true,
     reasoningEfforts: [...QODER_REASONING_EFFORTS],
-    noVisionModels: [...QODER_GLOBAL_MODELS],
     note: "Official Qoder Global CLI using QODER_PERSONAL_ACCESS_TOKEN. Models are discovered per account with `qoder --list-models`; the documented roster is a degraded fallback. The CLI runs single-turn with tools, MCP, settings hooks, and session persistence disabled. Requires `npm install -g @qoder-ai/qodercli`.",
   },
   {

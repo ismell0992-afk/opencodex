@@ -316,6 +316,26 @@ payloads cannot clear cooldowns, actual request refusals still drive cooldown/fa
 default-on main-account hard lock retains its separate local admission policy. Registration
 warmup remains conservative and does not spend paid credits to validate an exhausted account.
 
+For an opted-in, unpaused main account with a currently full usage window, the existing
+`src/codex/auth-api/pool-mode-gate.ts` recovery sweep renews credit observations from three minutes
+of age, leaving time for token preparation before the five-minute freshness limit. Missing, zero,
+restricted or retracted evidence remains eligible for recovery discovery bound to the same physical
+account; a negative observation never stops later probes. Admission still requires fresh positive
+or unlimited evidence and the original spending controls; flags or approximate message counts alone
+cannot authorize spending. Native profile ownership, generation fences, single-flight,
+query pacing and failure backoff remain in force, including upstream Retry-After. Eligibility is
+checked again after token preparation. The independent hard lock still applies.
+When consent is on but spendable evidence is unavailable, the local credit refusal caps Retry-After
+at the base five-minute metadata recovery interval (or a sooner included reset), even when probe
+backoff grows longer. Without consent, Retry-After retains the included-quota reset deadline.
+
+Credit renewal supplies the passive option to `src/codex/auth-api/main-account-probe.ts`, including
+identity retries: WHAM success and terminal 401/403 responses never set or clear needs-reauth in
+this mode. Native token preparation also preserves the traffic quarantine. Other callers retain
+the existing auth behavior. Failed or incomplete observations never renew the credit clock;
+refreshing usage does not redeem reset credits or validate pending accounts through inference.
+Coverage: `tests/codex-integration/main-account-credit-renewal.test.ts`.
+
 Credit parsing, expiry, partial updates and reset-ticket separation are covered in
 `tests/codex-integration/codex-quota-parser-parity.test.ts`; selection and bulk-pause behavior
 are covered in `tests/codex-integration/codex-credits-after-limit.test.ts` and
@@ -413,6 +433,25 @@ invalidates old evidence. Request-owned bearers are matched only against a crede
 workspace already observed under native ownership; an unrelated or unmatched keyring credential
 is not attributed to stored main and introduces no physical-main read. Credential equality tags
 remain process-local and never enter disk, logs, or management DTOs.
+Plain-main HTTP and WebSocket Responses on the canonical OpenAI forward provider refresh cached
+main usage under that same credential/workspace match, including stored-main substitution and
+an identical caller-owned credential. Materialization captures a process-local dispatch proof;
+HTTP delivery captures the response-arrival proof before any body await and retains it for those
+headers even if deferred recovery renews the context. Publication rechecks identity and credential
+generations, including after an awaited HTTP import
+and for every WebSocket frame. A replaced credential, unmatched workspace, or custom destination
+cannot publish main usage. Pool health/failover handling stays scoped to Pool contexts.
+The dispatch additionally fences the process-wide credential mutation epoch, so native main
+refresh and same-account reauth commits reject an older response before quota observation catches
+up. Publications for other credentials also conservatively drop the main update.
+Each plain-main WS observer renews its live dispatch object with every captured fence unchanged.
+Every invocation claims that observer's own copy before checking liveness, preventing
+HTTP publication from stream-wrapper replacement Responses. A failed-upgrade HTTP fallback with no WS quota
+frames remains unclaimed and publishes normally, including after an earlier attempt observed quota;
+response markers remain an additional guard.
+An operator-granted HTTP replacement renews only the dispatch object identity, copying all captured
+credential and config fences unchanged. Its unclaimed attempt can publish only while those original
+fences remain live; the failed WS observer retains its old claimed object.
 `src/codex/auth-api/main-account-probe.ts` re-reads the bounded stored main credential and
 rechecks its writer, bearer and generation after body/retry awaits, before publishing main usage,
 credits, plan, reauth or Reserve state, including terminal 401/403 mutations. An unreadable file

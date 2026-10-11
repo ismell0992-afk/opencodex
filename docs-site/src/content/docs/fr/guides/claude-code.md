@@ -61,7 +61,8 @@ ocx claude
 | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | Seuil de compactage du contexte automatique (par défaut `829800`) ; injecté uniquement lorsque le contexte automatique est activé |
 | `ANTHROPIC_MODEL` | `claudeCode.model` (facultatif) |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel` (facultatif ; ancien `ANTHROPIC_SMALL_FAST_MODEL` également) |
-| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` ; lors d'un lancement par abonnement, si non défini, `claude-opus-5-5[1m]` / `claude-sonnet-5[1m]` / `claude-fable-5-1[1m]` natif |
+| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` ; lors d'un lancement par abonnement, si non défini, `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]` natif |
+| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE,HAIKU}_MODEL_NAME` | Libellé `/model` d'un emplacement de niveau qu'OpenCodex règle sur un alias routé (par exemple `ocx-claude-native--gpt-6.1-sol` → `gpt-6.1-sol (native)`). La même paire est écrite dans l'environnement système launchd et dans le hook shell. L'identifiant du modèle reste l'alias. Un emplacement ou un libellé que vous définissez vous-même n'est pas modifié |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `1` lorsque `alwaysEnableEffort` est activé (conditionnel) |
 | `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` lorsqu'il est défini (conditionnel ; désactivé par défaut) |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | Remplacement du contexte hérité lorsque `maxContextTokens` est défini (conditionnel) |
@@ -161,7 +162,7 @@ modèles n'écrivent jamais un profil passerelle sur une installation first-part
 
 ### First-party de la CLI Claude Code
 
-Activez l’interrupteur dans Connexion → Claude ou lancez `ocx claude config set --first-party on` ; utilisez `off` pour désactiver. L’activation est refusée si le proxy local est indisponible, si l’autorité ne peut être préparée, si les réglages sont illisibles ou si des clés appartiennent à un autre programme. La désactivation reste enregistrable. Avec le seul first-party Desktop actif, définissez `NO_PROXY='*'` dans le shell pour un terminal entièrement natif. Le risque pour le compte décrit ci-dessus s’applique aussi à la CLI.
+Activez l’interrupteur dans Connexion → Claude ou lancez `ocx claude config set --first-party on` ; utilisez `off` pour désactiver. L’activation est refusée si le proxy local est indisponible, si l’autorité ne peut être préparée, si les réglages sont illisibles ou si des clés appartiennent à un autre programme. La désactivation reste enregistrable. Avec le seul first-party Desktop actif, définissez `NO_PROXY='*'` dans le shell pour un terminal entièrement natif. Le risque pour le compte décrit ci-dessus s’applique aussi à la CLI. Tant que le first-party est actif, OpenCodex ajoute aussi `127.0.0.1`, `localhost`, `::1` et `0.0.0.0` à `NO_PROXY` dans `~/.claude/settings.json` afin que les serveurs MCP locaux (y compris les noms `*.localhost`) contournent le proxy ; ajoutez vous-même toute autre adresse `127.x`. Une valeur `NO_PROXY` existante n’est complétée que des entrées manquantes ; à la désactivation, elle retrouve sa valeur d’origine si OpenCodex a pu l’enregistrer et que vous ne l’avez pas modifiée depuis, sinon la valeur actuelle, entrées ajoutées comprises, est conservée.
 Désactiver le routage Claude conserve les variables de proxy gérées. Tant que le listener fonctionne, toutes les requêtes Messages sont relayées sans modification ; après son arrêt, `claude` ne peut plus se connecter avant le lancement d’OpenCodex ou la désactivation du first-party Desktop/CLI. Le lancement natif via `ocx claude` ne définit `NO_PROXY=*` que pour un environnement géré sans proxy HTTPS hérité d’un autre programme. Sinon il conserve ce proxy et avertit que l’interception définie dans les réglages reste active ; désactivez le first-party ou retirez ce réglage.
 L’interface distingue les réglages illisibles (unknown), une URL opencodex avec jeton mais une AC étrangère (foreign : corrigez HTTPS_PROXY / NODE_EXTRA_CA_CERTS à la main) et le routage Claude désactivé avec un listener encore actif qui relaie sans modification (disabled : désactivez first-party avant le redémarrage). Sans listener, l’état est stopped ; avec une AC gérée mais un port ou jeton incorrect, il est broken. Avec le first-party actif et une interception indisponible, stopped et broken affichent routingOff : le routage Claude ou l’interception est désactivé, ou cette machine est cliente d’un autre hub opencodex ; réactivez l’interception ici ou désactivez first-party pour supprimer les réglages. Si l’interception est disponible, stopped demande de lancer opencodex et broken conseille `ocx ensure` ou un redémarrage. La CLI activée sans proxy est non appliquée ; un seul client activé avec un proxy opérationnel partage le relais ; aucun client activé avec un proxy restant produit un avertissement de réglage résiduel.
 unknown signifie qu’opencodex ne peut pas déterminer si les réglages pointent encore vers son proxy. Un proxy sans jeton sur 127.0.0.1 avec une AC étrangère est local : sa propriété est incertaine ; supprimez HTTPS_PROXY de ~/.claude/settings.json si vous ne l’utilisez plus. disabled exige des réglages appliqués correspondant au listener ; un port ou jeton différent donne broken même si le routage est désactivé.
@@ -423,7 +424,7 @@ d'OpenCodex, de réappliquer ce profil et de démarrer une nouvelle conversation
 dépannage, sans garantie de résolution. OpenCodex ne peut pas observer l'état du sélecteur ; il achemine
 l'identifiant du modèle porté par chaque requête. Vérifiez ce que le client envoie sous **Logs → requestedModel**.
 
-Les modèles dont la fenêtre de contexte de référence atteint 1M obtiennent une ligne supplémentaire `…[1m]` dans le sélecteur.
+Les modèles dont la fenêtre de contexte de référence atteint 1M ou au moins le seuil de compactage par défaut (829 800) obtiennent une ligne supplémentaire `…[1m]` dans le sélecteur.
 Sa sélection indique à Claude Code la fenêtre complète de 1M pour ce modèle, tout en maintenant le compactage automatique ; le proxy retire
 le marqueur avant le routage.
 La sélection est conservée dans le champ `model` de `settings.json` ; pour les requêtes entrantes, l'alias est de nouveau
@@ -458,8 +459,10 @@ conservent leurs identifiants canoniques sur les deux interfaces.
 
 ### Marqueur `[1m]` de variante contextuelle
 
-Les modèles dont la fenêtre de contexte de référence atteint 1M — ou, avec le contexte automatique, dépasse 200k tout en atteignant
-au moins le seuil de compactage — obtiennent une ligne supplémentaire `…[1m]` dans le sélecteur. En la sélectionnant, Claude Code
+Les modèles dont la fenêtre de contexte de référence atteint 1M ou au moins le seuil de compactage par défaut (829 800)
+obtiennent une ligne supplémentaire `…[1m]` dans le sélecteur. Ce plancher est fixe : modifier la valeur de compactage ne l'abaisse pas,
+et un modèle Claude sur une route Anthropic doit réellement atteindre 1M. Sans contexte automatique, seule une fenêtre de 1M compte.
+Au-delà de la fenêtre réelle, l'erreur `prompt is too long` déclenche le compactage automatique de Claude Code. En la sélectionnant, Claude Code
 tient compte d'un contexte complet de 1M. Le proxy supprime le suffixe `[1m]`, sans tenir compte de la casse, avant la
 résolution de l'alias et le routage.
 
@@ -468,8 +471,9 @@ résolution de l'alias et le routage.
 Claude Code attribue une limite de 200k jetons à tout modèle qu'il ne reconnaît pas. Le **contexte automatique**, activé
 par défaut, corrige ce comportement :
 
-1. Les modèles dont la fenêtre réelle dépasse 200k **et** atteint au moins le seuil de compactage automatique obtiennent le
-   marqueur `[1m]` dans les lignes du sélecteur et les variables d'environnement qui les désignent.
+1. Les variables d'environnement de lancement reçoivent le marqueur `[1m]` lorsque la fenêtre réelle dépasse 200k **et**
+   atteint au moins le seuil de compactage automatique configuré. Les lignes de découverte et du sélecteur Desktop ne suivent pas
+   ce seuil : elles utilisent le plancher fixe de 829 800 jetons (1M réel pour un modèle Claude sur une route Anthropic).
 2. `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (`829800` par défaut, plage `100000`–`1000000`) est injecté afin
    que la conversation soit automatiquement résumée à ce seuil.
 
@@ -482,9 +486,24 @@ Trois états de configuration :
 La valeur de compactage est réglable dans **Connexion → Claude**. **Avertissement :** une valeur supérieure à la fenêtre réelle d'un modèle
 rend ce modèle inutilisable : les tours échouent avant que le résumé puisse se déclencher.
 
-Les modèles Anthropic natifs dont le contexte est inférieur à 1M ne sont jamais marqués automatiquement. Les valeurs que vous exportez vous-même
-restent prioritaires ; le proxy s'appuie sur votre valeur pour déterminer les modèles qui peuvent recevoir le marqueur sans risque.
+Les modèles Anthropic natifs dont le contexte est inférieur à 1M ne sont jamais marqués automatiquement. Une fenêtre de compactage que vous exportez vous-même
+reste prioritaire pour le marquage des variables de lancement ; le proxy s'appuie sur votre valeur pour déterminer les modèles qui peuvent recevoir le marqueur sans risque.
+Les lignes de découverte ignorent cet export et conservent le plancher fixe.
 Les valeurs de configuration invalides définies manuellement reviennent à 829,800.
+
+### Comptabilisation du contexte (1M par défaut, 200k sur option)
+
+`claudeCode.contextAccounting` fixe ce qu'opencodex choisit par défaut. Absent (`1m`, valeur par défaut), les modèles à
+longue fenêtre sont proposés à 1M dans les emplacements d'environnement du lancement, les sélecteurs Desktop, Desktop 3P
+(`prefer1m`) et les sous-agents générés. Avec `200k`, rien n'est marqué `[1m]` automatiquement, `CLAUDE_CODE_AUTO_COMPACT_WINDOW`
+n'est pas injecté et Desktop 3P retire `prefer1m` tout en gardant `supports1m`. Un sélecteur que vous marquez vous-même `[1m]`
+reste disponible (les sous-agents générés ou forcés retirent toujours un marqueur que la fenêtre du modèle ne peut pas porter), et
+la découverte liste toujours les lignes `· 1M` des modèles réellement à 1M. `200k` l'emporte sur le contexte automatique : une valeur
+de compactage que vous exportez ne réactive pas le marquage automatique, mais opencodex laisse votre export en place.
+
+```bash
+ocx claude config set --context-accounting 200k
+```
 
 ### Environnement effectif des modèles
 
@@ -611,7 +630,7 @@ pour de longues exécutions sans surveillance.
 
 ## Effort de raisonnement
 
-Le paramètre `/effort` de Claude Code est conservé sur l'ensemble de l'adaptateur :
+Pour les requêtes traduites de Messages vers Responses, le paramètre `/effort` de Claude Code est converti comme suit :
 
 | Format du protocole | Correspondance |
 | --- | --- |
@@ -619,7 +638,9 @@ Le paramètre `/effort` de Claude Code est conservé sur l'ensemble de l'adaptat
 | `thinking.type: "enabled"` + `budget_tokens` | ≤4096→`low`, ≤16384→`medium`, ci-dessus→`high` |
 | `thinking.type: "disabled"` | `reasoning: { effort: "none" }` ; résumé omis |
 
-La valeur résolue apparaît dans la colonne **Effort de raisonnement** du journal des demandes.
+Pour les requêtes traduites, le niveau obtenu apparaît dans la colonne **Effort de raisonnement** du journal des demandes.
+Les requêtes Messages natives gérées consignent le budget de réflexion activé sous la forme `budget:<tokens>`
+en l'absence d'un `output_config.effort` reconnu ; cette journalisation ne modifie pas le corps transmis.
 
 ## Traduction entrante (Messages → Réponses)
 
@@ -742,7 +763,7 @@ une valeur `ANTHROPIC_BASE_URL` obsolète. Ouvrez un nouveau terminal ou réexé
 
 **Plafond de contexte 200k malgré un grand modèle** — Sélectionnez la variante `[1m]` dans le sélecteur ou activez
 le contexte automatique, activé par défaut. Si le sélecteur n'affiche aucune ligne `[1m]`, la fenêtre de contexte de référence du modèle
-peut être inférieure au seuil de compactage automatique.
+peut être inférieure au plancher fixe de 829 800 jetons.
 
 **Nombre élevé de jetons provenant du chargement des compétences** — La compétence `claude-api` fournie (~136k jetons) se charge automatiquement
 quand un modèle Claude est mentionné. Ce comportement est normal avec le transfert natif ; pour les modèles routés, opencodex la remplace
@@ -752,7 +773,7 @@ par défaut par un contenu minimal (`blockedSkills: ["claude-api"]`).
 `<!-- ocx-route: ... -->`, et non l'argument `model` de l'outil Agent. Vérifiez que la directive désigne la route voulue.
 Utilisez `"haiku"` comme valeur de remplacement pour le modèle.
 
-Dans `config.json`, `claudeCode.stabilizePromptCache: true` déplace les notices Claude reconnues en fin des instructions système vers un dernier message utilisateur sur les routes traduites. La valeur par défaut est `false`. Activez cette option seulement si ce changement de rôle convient à vos clients. Les exemples dans des blocs de code et le texte non reconnu sont conservés ; le transfert Anthropic natif reste inchangé. Sans métadonnées, la clé de cache suit les instructions stabilisées. Cette option ne crée pas une identité de conversation et ne garantit aucun succès du cache amont.
+Dans `config.json`, `claudeCode.stabilizePromptCache: true` retire les notices Claude reconnues à la fin des instructions système sur les routes traduites. Les pieds de page reconnus de la forme `<total_tokens>N tokens left</total_tokens>` sont supprimés, même lorsqu’ils sont répétés. Les rappels TaskCreate sont toujours déplacés vers un dernier message utilisateur ; si seuls des pieds de page de tokens ont été retirés, aucun message d’entrée n’est ajouté. La valeur par défaut est `false`. Activez cette option seulement si ce changement de rôle convient à vos clients. Les exemples dans des blocs de code et le texte non reconnu sont conservés ; le transfert Anthropic natif reste inchangé. Sans métadonnées, la clé de cache suit les instructions stabilisées. Cette option ne crée pas une identité de conversation et ne garantit aucun succès du cache amont.
 
 Sur toutes les routes Chat traduites, les rappels de l’historique conservent leur position dans la conversation, après les résultats d’outils encore attendus. L’ajout d’un rappel ne réécrit donc pas le prompt système initial, et une instruction placée au milieu de la conversation n’arrive plus avant les tours qu’elle était censée suivre. Le rôle porté par cet emplacement se décide séparément : un rappel part en `system`, sauf si le fournisseur enregistre `foldDeveloperRoleToSystem: false`, ce qui indique que le service en amont accepte le rôle `developer` et le transmet à la même position. Un service qui ne l’accepte pas répond `400 role 'developer' is not allowed` et le tour ne démarre pas, d’où le repli d’une destination non enregistrée. Ce comportement s’applique avec ou sans `stabilizePromptCache` ; le transfert Anthropic natif reste inchangé. La réutilisation du cache exige toujours une identité de session stable et un cache disponible en amont. Les changements des instructions ou outils antérieurs et la compaction de la conversation peuvent aussi affecter les succès du cache ; préserver l’ordre des rappels ne suffit pas à garantir sa réutilisation.
 
@@ -766,10 +787,12 @@ The Subagents page offers **Force all subagents onto one model**, off by default
 
 `ocx agent subagents force combo/tev-auto` sets `claudeCode.subagentModelForce`; `ocx agent subagents force -` clears it. `ocx agent status` reports the setting. `GET /api/subagent-models` returns `force`, `forceAvailable`, and `forceStatus`; `PUT` accepts `{ "force": "combo/tev-auto" }` or `{ "force": null }` without changing the roster. Omitting `force` leaves it unchanged. Invalid or unexposed targets are rejected on write; stale targets are reported and skipped at launch.
 
-This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` only for an authoritative million-token window; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
+This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` when the authoritative window reaches the fixed 829,800-token floor, and only for a genuine 1M window on Anthropic Claude models and bare `claude-*` selectors; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
 
 Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
 
 The dashboard warns about old or unknown CLI versions, unavailable targets, and either variable already present in `settings.json` → `env` (which overrides launch env). Detection is read-only and server-local: it cannot inspect another launch shell, another machine, or project-local settings. An unknown result is not proof of force support.
 
 Explicit gateway selectors on a generated agent request take precedence over its legacy `ocx-route` fallback, even if the saved force setting changes after launch. For shell or settings overrides of generated roster agents, use an explicit gateway alias; bare Claude ids retain the older-client fallback behavior. Native aliases restore their bare model before the existing credential and model-map checks. Connected launches validate force targets against a fresh authenticated gateway catalog; failed discovery skips automatic force injection, and cached context windows alone never prove availability.
+
+Uniquement avant toute sortie : Un HTTP 401 authentication_error (sans error.code) portant exactement le message « OAuth access token has been revoked. » marque le compte OAuth ayant envoyé la requête comme nécessitant une nouvelle connexion et efface ses affinités de session. Avant toute sortie, un compte disponible du même pool peut prendre le relais dans les limites existantes. Sans remplaçant, le 401 original est renvoyé et le compte reste exclu jusqu’à une nouvelle connexion. Les autres 401 gardent leur traitement actuel.

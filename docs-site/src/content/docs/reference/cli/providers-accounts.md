@@ -225,6 +225,14 @@ them anyway: it routes to the account-pool login, so `ocx login codex --reauth` 
 `ocx account reauth codex`. The dashboard Codex account pool (Reauthenticate) does it too. That route
 runs inside the proxy, so it needs a running one.
 
+For the ChatGPT OAuth provider, an explicit terminal OAuth code confirming an expired
+or revoked refresh grant requires signing in again. Free-text descriptions alone never
+require reauthentication. Temporary token-service failures, timeouts and cancellation leave the account
+eligible for a later refresh. Browser token exchange and refresh each have a 30-second
+per-fetch deadline covering headers and body. HTTP-derived errors show only the status
+and an allowlisted OAuth code. Cancellation, timeout and transport failures use fixed
+messages without the original reason or cause.
+
 ```bash
 ocx login xai
 ocx login anthropic
@@ -245,6 +253,12 @@ A `403` asking to verify the account quarantines that credential as `needs-reaut
 when account failover is enabled, the request can retry on another eligible account. Complete
 Google's account verification, then run `ocx login google-antigravity`. Silent token refresh
 does not clear this verification requirement. If OpenCodex cannot save the quarantine, this adapter exchange preserves the original `403` without another recovery send; the account has not been durably quarantined. If a sibling request cannot be built or admitted for sending, the exchange delivers the original `403` through normal error formatting. An enclosing combo or policy route can still apply its existing fallback rules.
+
+For fetch-based web-search requests, automatic sibling rotation accepts only a complete, bounded
+Google error envelope containing `error.details[].reason === "VALIDATION_REQUIRED"`. Verification
+wording alone does not rotate. This request-scoped recovery uses the sibling's token and project
+without persisting a `needs-reauth` mark; cancellation, committed output, budget exhaustion or an
+unavailable sibling preserves the failure.
 
 A proxy that is already running picks up the new credential without a restart: the CLI asks it to
 reload that one provider from disk, and the request carries no credential of its own. If the
@@ -392,6 +406,12 @@ or recovery evidence. The account card shows the published cached usage, keeping
 with the lock status; Direct provider quota omits an unpublished response and its older cached report. Conflicting account
 identities and stale 401/403 replies retain the current
 cached info and cannot clear or set the current account's reauthentication state.
+
+Responses to requests sent with the identified main credential refresh its cached
+usage from their quota headers, whether the proxy substituted the stored credential or
+the caller sent the same credential itself. A response is applied only if that
+credential is still the observed main credential when it arrives; a caller-owned
+credential for another account or workspace never updates the main account's usage.
 
 The persisted option is `"codexMainAccountHardLock"` in OpenCodex's `config.json`. An absent key or
 `true` means on; only an explicit `false` turns it off, and that is what switching the setting off
@@ -937,6 +957,8 @@ ocx account grok-reset-coupons --consume --yes --token-id <token-id>
 ```
 
 Pass `--operation-id <uuid>` (must be a valid UUIDv4) to guarantee idempotent settlement. If the network drops or the command is retried, identical operation IDs replay the durably recorded outcome instead of consuming a second coupon.
+
+The command exits nonzero unless the settled code is `redeemed` (including a replayed `redeemed`). When the outcome is unconfirmed (a missing or unrecognized settled code, `attempt_unresolved`, `attempt_in_progress`, `attempt_reconcile_failed`, `operation_state_changed`, `operation_token_mismatch`, `attempt_mark_failed`, or `ledger_unavailable`/`capacity` with an operation ID), it prints the `--operation-id` to preserve; rerun with that same ID instead of starting a new operation. A recorded refusal (`auth_failed`, `fetch_resets_failed`, `no_coupons_available`, `coupon_unavailable`, or `token_unresolved`), such as a replayed failure, prints `Coupon was not redeemed (<code>)`; any other settled code counts as unconfirmed.
 
 ### `ocx account main <subcommand>`
 

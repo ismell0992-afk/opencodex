@@ -1,10 +1,10 @@
 ---
 title: Integrations
-description: Connect opencodex to OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo and Factory Droid from the dashboard — one switch per client, with a backup taken before every write.
+description: Connect opencodex to OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo, Command Code and Factory Droid from the dashboard — one switch per client, with a backup taken before every write.
 ---
 
 The **Connect** page writes opencodex's provider block into a client's own config
-file, and removes it again. Seventeen clients work this way, each with a switch:
+file, and removes it again. Eighteen clients work this way, each with a switch:
 
 | Client | Config file | Format | When the change takes effect | Credential |
 |---|---|---|---|---|
@@ -24,11 +24,12 @@ file, and removes it again. Seventeen clients work this way, each with a switch:
 | omo (Pi / senpi) | `~/.omo/agent/models.json` | JSON | new sessions | loopback placeholder |
 | Cline CLI | `~/.cline/data/settings/providers.json` and sibling `models.json` | JSON pair | after stopping and restarting Cline | loopback placeholder |
 | Kilo | first existing `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`, or `config.json` under `~/.config/kilo` | JSONC | new sessions | `OPENCODEX_KILO_API_KEY` |
+| Command Code | `~/.commandcode/providers.json` (on Windows with the default home: use `HOME ?? USERPROFILE` only if nonblank and Windows-absolute, otherwise `homedir()`; a separately supplied home is preserved; append `.commandcode\providers.json`) | JSON | next launch of Command Code | none — keyless loopback (`apiKey: false`) |
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | JSON | immediately via file watching | none — keyless loopback |
 
 "omo" names three products that share the `~/.omo` folder. The **omo** tab manages Pi-based omo
 (the senpi engine) through `~/.omo/agent/models.json`, as in the table above. Codex-based omo
-(LazyCodex) gets its own controls on the Codex tab, described in
+(LazyCodex) gets its own section on the same tab, shown only when LazyCodex is detected, described in
 [omo (Codex / LazyCodex) role models](#omo-codex--lazycodex-role-models). OpenCode-based omo
 (oh-my-opencode) keeps its own config under OpenCode; opencodex does not read or write it.
 
@@ -531,6 +532,14 @@ per-profile refusal, residual and separately labeled redacted backup information
 inspect the affected profile before retrying. This refresh is separate from each
 profile's preview/bound mutation workflow.
 
+Sync refreshes only profiles whose sync preference is on, so an empty result is not a failure.
+If `ocx integration client status --client aside` shows a profile as `off (stale)`, status
+prints the commands to reconnect it: review `ocx integration client preview --client aside
+--operation apply --profile N`, and run `ocx integration client enable --client aside --profile N`
+only if the preview permits the change and you accept it. Nothing is re-enabled automatically.
+A malformed `asideProfileSync` block in `config.json` turns every profile off and logs a
+warning when the config loads.
+
 Each profile has separate ownership and history. Existing user edits, unsafe paths and linked
 catalogs are refused; the existing explicit overwrite and drift-confirmation controls remain
 available. Fully quit and reopen Aside to load changed model files.
@@ -538,10 +547,26 @@ available. Fully quit and reopen Aside to load changed model files.
 
 ## ZCode 3.14 and later
 
-ZCode 3.14 moved its custom providers to `~/.zcode/v2/provider_config.json` and left
+By default, ZCode 3.14 stores its custom providers in `~/.zcode/v2/provider_config.json` and left
 `~/.zcode/v2/config.json` reachable only through a one-shot import that runs when the new file is
 missing. ZCode creates the new file the first time it runs, so on any install that has ever been
 launched the import is already spent and a write to `config.json` reaches nothing.
+
+ZCode can relocate its data root with an absolute `dataBaseDir` in
+`~/.zcode/v2/setting.json`. This bootstrap file always stays under the default home;
+the provider store moves to `<dataBaseDir>/.zcode/v2/provider_config.json`.
+`ZCODE_DATA_DIR` takes precedence and names the `.zcode` root directly, while
+`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` takes precedence for the provider file.
+`ZCODE_DATA_BASE_DIR` is a separate native selector and is not an alias for `ZCODE_DATA_DIR`.
+
+Unreadable, malformed or relative bootstrap settings leave the active root unknown.
+Apply, overwrite and refresh refuse with a repair message instead of claiming a successful
+legacy write. An existing explicit provider file can still establish the active store.
+Ownership recorded at the original default config or store keeps its path, fingerprints
+and undo history; disable removes that original block before a later enable can use the
+relocated store. An older undo also refuses while another path owns the integration.
+If an earlier explicit selector no longer identifies the owned file, restore that selector
+before disabling; opencodex retains the record and refuses to abandon the block.
 
 opencodex writes `provider_config.json` directly where it can. Enabling the integration adds the
 `opencodex` provider rule to that file, a catalog refresh updates it, and disabling removes exactly
@@ -651,7 +676,7 @@ key) in the app's API key field. The app sends it as `Authorization: Bearer`, wh
 
 ## omo (Codex / LazyCodex) role models
 
-When LazyCodex is installed, the Codex tab shows an **omo (Codex / LazyCodex)** section listing
+When LazyCodex is installed, the omo tab shows an **omo (Codex / LazyCodex)** section below the Pi-based omo controls, listing
 every Codex agent role found in `$CODEX_HOME/agents/*.toml`, with the model each one is pinned
 to. Codex runs a role on that pin no matter which model the parent asks for, so this is where a
 role's model is actually decided. LazyCodex counts as installed when the `omo@sisyphuslabs`
@@ -664,7 +689,7 @@ press Save:
 - opencodex rewrites only the root `model = "..."` line of that role's file. The role's
   instructions, comments, and other keys are left exactly as they were. A role with no pin gets
   one added near the top of the file.
-- The same value is written to `codex.agents.<role>.model` in `~/.omo/omo.jsonc`, which
+- The same value is written to `[codex].agents.<role>.model` in `~/.omo/omo.jsonc`, which
   LazyCodex 5.1.1 and later reads. If that file does not exist it is not created. If it contains
   comments it is left untouched, because saving would remove them; the tab says so, and you can
   set the value there by hand. Symlinks and non-regular files are rejected; on macOS and Linux,
@@ -677,6 +702,11 @@ New Codex sessions pick up the change. The same controls exist on the command li
 ocx agent roles
 ocx agent roles set explorer xai/grok-4.5
 ```
+
+`ocx agent roles set <role> <model> --effort <level>` also sets the role's reasoning effort: it
+rewrites the role file's `model_reasoning_effort` line and writes `[codex].agents.<role>.reasoning`
+in omo.jsonc when LazyCodex has that level (`ultra` stays in the role file only, and an older
+`reasoning` is removed). A Save that changes only the model leaves both effort values as they were.
 
 ### Auto-assign
 
@@ -740,6 +770,48 @@ loads the updated file.
 ocx integration client enable --client kilo
 ocx export --client kilo --out ./kilo.jsonc
 ```
+
+## Command Code
+
+Command Code keeps its custom providers in `~/.commandcode/providers.json`. This
+integration writes `provider.opencodex` into that file and is loopback-only.
+
+**Which root it writes.** Command Code resolves its provider map as
+`document.provider ?? document.providers`, so the singular root wins whenever it
+exists. The integration therefore reads the target file first and writes into the
+root that file already uses: a document that already carries a `providers` map keeps
+it, and your other providers stay readable. A fresh file gets the singular `provider`
+root. Both roots are declared as managed paths, so Disable removes the block from
+whichever one it was written into.
+
+**The credential form.** The provider is written with `apiKey: false`, the documented
+form for an endpoint that needs no key. A raw string is refused by Command Code, and
+no service-token file is read, referenced, or exported by this integration.
+
+**Home resolution.** There is no `COMMANDCODE_HOME` override here. The published
+client resolves `HOME ?? USERPROFILE` and then appends `/.commandcode/providers.json`;
+it does not consult that variable. An override this integration honoured but the
+client ignored would make Apply report success at a path Command Code never opens, so
+the path is always `~/.commandcode/providers.json`.
+On Windows with the default home, the integration uses `HOME ?? USERPROFILE`
+only when the selected value is nonblank and Windows-absolute; otherwise it uses
+`homedir()`. A separately supplied home is preserved. A `HOME` set by Git for
+Windows or MSYS2 is therefore honoured only when it passes those checks.
+
+Paste the key yourself if you later move the provider off loopback: Command Code
+stores keys in `~/.commandcode/auth.json` (via `/connect`), not in `providers.json`.
+
+```bash
+ocx integration client enable --client commandcode
+ocx export --client commandcode --out ./providers.json
+```
+
+`ocx commandcode restore --op <opId>` accepts only Command Code operations, including
+`--preview` and `--plan-fingerprint` requests. It rejects client/profile overrides.
+The running proxy must support client-scoped restore; older proxies return an error
+without falling back to the generic restore endpoint.
+Use `ocx integration client restore` for the generic journal and the explicit Aside
+profile commands above for Aside operations.
 
 ## Factory Droid
 

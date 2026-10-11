@@ -316,7 +316,9 @@ Combo's `decisionProvider`:
 }
 ```
 
-- The row's `baseUrl` must be the full decision endpoint and its path must end in `/systemone`.
+- The row's `baseUrl` must be the full decision endpoint. HTTPS services may use any path,
+  such as `/v1/decisions`; plain HTTP endpoints must still end in `/systemone`.
+  Userinfo, query strings, and fragments are not accepted in decision URLs.
   The decision model is `defaultModel`, else the first `models` entry; a row with neither is
   treated as unusable and fails open without a request (`jev-latest` is TypeSafe's model and is
   never sent to a self-hosted host). The row is a decision service only: it is never published as a
@@ -344,8 +346,30 @@ Combo's `decisionProvider`:
 
 The provider's **Test connection** sends a bounded probe decision to its endpoint.
 **Create JEV Auto** on a System One provider (keyless rows included) prefills that row as the
-decision provider. Disabled rows, endpoints not ending in `/systemone`, and rows without a model
+decision provider. Disabled rows, invalid decision URLs, and rows without a model
 are shown with a reason and cannot be picked.
+
+For an alternative hosted service with the same decision request/response contract, add a separate
+provider row and select it with the Combo's `decisionProvider`:
+
+```json
+{
+  "providers": {
+    "alternative-decider": {
+      "adapter": "jev-decision",
+      "baseUrl": "https://decisions.example/v1/decisions",
+      "apiKey": "${ALTERNATIVE_DECISION_KEY}",
+      "defaultModel": "decision-model-v1",
+      "liveModels": false
+    }
+  }
+}
+```
+
+Set `decisionProvider: "alternative-decider"` on the existing JEV Combo. Its own credential and
+model accompany the bounded decision state; TypeSafe environment credentials are never inherited.
+The `jev` id remains canonical. HTTPS/TLS, outbound destination restrictions, redirect refusal,
+request/response bounds, timeout, cancellation, and the eligible-choice allowlist still apply.
 
 [Laya MLX](https://github.com/mizorewww/laya-mlx) runs typed decisions on Apple Silicon. To use it
 with this method, expose it through a System One-compatible HTTP wrapper, then configure a row like
@@ -488,12 +512,13 @@ target/effort, a coarse decision gate, latency, optional confidence/probability,
 Automated tests use mocked TypeSafe responses plus a no-key fail-open smoke; a live TypeSafe decision
 requires an operator-supplied key and is not run implicitly.
 
-When JEV's selected effort is applied to the Responses child, request and attempt logs show a
-differing effort as `high->xhigh` or `high->low`. Later effort adjustments remain in the chain,
-such as `high->xhigh->medium`. An unchanged effort or a target without effort control keeps the
-existing label; fallback attempts do not inherit the initial JEV effort. With the opt-in
-`protocols.rollout.nativeChatCombos` path, native Chat children currently do not apply JEV's
-selected effort; their labels retain the caller's effort and any native child adjustments instead.
+JEV's selected effort applies to the first Responses child and to native Chat children on the opt-in
+`protocols.rollout.nativeChatCombos` path. It replaces caller effort and removes conflicting thinking
+controls and caller `service_tier`; an explicit no-effort choice removes effort even when the Combo has
+a forced default. Provider effort pins, caps and wire normalization still apply afterward.
+Request and attempt logs show a differing applied effort as `high->xhigh` or `high->low`, retaining later
+adjustments such as `high->xhigh->medium`. An unchanged effort or a no-effort choice keeps the existing
+label. Later fallback targets use ordinary Combo policy from the original request, without another JEV call.
 
 After the Combo has served requests, open **Models → Combos → jev-auto → Stats** to inspect JEV's
 picks without replacing the normal model picker or Usage page. The tab separates backend-reported decision
@@ -803,7 +828,7 @@ Combos are stored in the top-level `combos` object, keyed by combo id:
 | `alias` | No | none | Optional trimmed public model id; use the alias rules above. An empty value is stored as no alias. |
 | `nativeAlias` | No | `false` | Explicitly permit a currently supported bare native `alias` to take routing and catalog precedence. Never inferred from the alias. |
 | `displayName` | No | none | Bounded display-only catalog label. Required and non-empty when `nativeAlias` is true. |
-| `decisionProvider` | No | `"jev"` | JEV only. Provider id of the decision service: `"jev"` (TypeSafe, valid without a provider row; the same as omission) or a configured `adapter: "jev-decision"` row with a `/systemone` `baseUrl`, such as a self-hosted Ollama `tev1`. |
+| `decisionProvider` | No | `"jev"` | JEV only. Provider id of the decision service: `"jev"` (TypeSafe, valid without a provider row; the same as omission) or a configured `adapter: "jev-decision"` row with a full HTTPS decision URL or a local HTTP `/systemone` URL, such as a self-hosted Ollama `tev1`. |
 | `decisionTimeoutMs` | No | `4000` | JEV only. Integer from 1000 to 120000: the decision deadline before failing open to the first eligible target. |
 
 ## Troubleshooting

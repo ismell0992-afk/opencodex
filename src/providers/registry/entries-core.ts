@@ -14,6 +14,7 @@ import { cursorFastCapableBases } from "../../adapters/cursor/catalog";
 import { COMMAND_CODE_MODEL_REASONING_EFFORTS } from "../command-code-efforts";
 import { isCanonicalOpenRouterTarget } from "../openrouter-routing";
 import type { ProviderRegistryEntry } from "./types";
+import type { AnthropicInstanceId } from "../anthropic-instance-id";
 import { ANTHROPIC_FAST_MODE_BETA } from "../anthropic-fast";
 import {
   ANTHROPIC_MODELS,
@@ -93,7 +94,7 @@ import {
  * Only the models Anthropic documents for the lane are classified; Opus 4.6 silently runs
  * standard and Opus 4.7, Sonnet, Haiku and Fable reject `speed`, so they and future ids stay
  * unclassified. Source: https://platform.claude.com/docs/en/build-with-claude/fast-mode
- * (2026-09-23) and the live probe in devlog/_plan/260923_anthropic_fast_speed.
+ * (2026-09-23) and the live probe in devlog/_fin/260923_anthropic_fast_speed.
  */
 const ANTHROPIC_FAST_WIRE = Object.freeze({
   kind: "anthropic-speed" as const,
@@ -108,6 +109,37 @@ const ANTHROPIC_FAST_MODELS: Readonly<Record<string, boolean>> = Object.freeze({
 });
 const ANTHROPIC_FAST_TIER_DESCRIPTION =
   "Claude fast mode: faster output at 2x price; needs usage credits (subscription) or fast-mode access (API)";
+
+/** Each instance owns its entire seed, including nested model lists and Fast wire maps. */
+function anthropicOAuthEntry(id: AnthropicInstanceId, label: string): ProviderRegistryEntry {
+  return structuredClone<ProviderRegistryEntry>({
+    id,
+    label,
+    adapter: "anthropic",
+    baseUrl: "https://api.anthropic.com",
+    authKind: "oauth",
+    allowBaseUrlOverride: true,
+    featured: true,
+    oauthId: id,
+    oauthFamily: "anthropic",
+    jawcodeBundle: "anthropic",
+    note: id === "anthropic" ? "Log in with your Claude account"
+      : "Independent Claude account pool — log in with a separate Claude account",
+    models: [...ANTHROPIC_MODELS],
+    modelContextWindows: { ...ANTHROPIC_MODEL_CONTEXT_WINDOWS },
+    modelInputModalities: { ...ANTHROPIC_MODEL_INPUT_MODALITIES },
+    modelReasoningEfforts: { ...ANTHROPIC_MODEL_REASONING_EFFORTS },
+    // Codex omits max_output_tokens; the fallback 8192 truncates long answers.
+    defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+    modelMaxOutputTokens: { ...ANTHROPIC_MODEL_MAX_OUTPUT_TOKENS },
+    defaultModel: "claude-sonnet-5",
+    // Subscription /fast remains opt-in: it draws usage credits at 2x price.
+    fastWire: ANTHROPIC_FAST_WIRE,
+    modelSupportsServiceTier: { ...ANTHROPIC_FAST_MODELS },
+    fastTierDescription: ANTHROPIC_FAST_TIER_DESCRIPTION,
+    fastOptIn: true,
+  });
+}
 
 export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
   {
@@ -177,7 +209,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
   },
   {
     // The canonical Cognition account provider, after absorbing `devin-cli`
-    // (devlog/_plan/260913_devin_provider_merge). The two ids were the same
+    // (devlog/_fin/260913_devin_provider_merge). The two ids were the same
     // `devin` adapter, the same server.codeium.com api-server, and the same
     // `devin-session-token$<JWT>` credential — only the account source
     // differed: this entry did an Auth0 browser sign-in while `devin-cli`
@@ -209,7 +241,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // (it is the current catalog, so its default ordering wins), then the ids
     // only the old devin entry carried. Degraded-mode seed only either way —
     // `liveModels` discovers the account's real roster.
-    models: ["swe-2", "swe-1-7", "gpt-5-6-sol", "gpt-6-astra", "gpt-6-1-sol", "gpt-6-sol", "gpt-6-luna", "claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5", "claude-sonnet-5", "glm-5-3", "kimi-k3", "gemini-3-8-flash", "grok-4-6", "grok-4-7", "swe-1-7-lightning", "gpt-5-6-luna", "gpt-5-6-terra", "claude-opus-4-8", "glm-5-2", "kimi-k2-7", "grok-4-5"],
+    models: ["swe-2", "swe-1-7", "gpt-5-6-sol", "gpt-6-astra", "gpt-6-1-sol", "gpt-6-sol", "gpt-6-luna", "claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-sonnet-5", "glm-5-3", "kimi-k3", "gemini-3-8-flash", "grok-4-6", "grok-4-7", "swe-1-7-lightning", "gpt-5-6-luna", "gpt-5-6-terra", "claude-opus-4-8", "glm-5-2", "kimi-k2-7", "grok-4-5"],
     liveModels: true,
     defaultModel: "swe-2",
     modelContextWindows: DEVIN_MODEL_CONTEXT_WINDOWS,
@@ -241,7 +273,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // the field but answers service_tier "default" — a live downgrade, not a fast tier.
     // Unlisted and future-discovered ids stay unclassified.
     // grok-4.7 applied and confirmed priority on OAuth Responses in the 2026-09-23
-    // live probe: devlog/_plan/260923_grok47_parity/010_probe-evidence.md.
+    // live probe: devlog/_fin/260923_grok47_parity/010_probe-evidence.md.
     modelSupportsServiceTier: {
       "grok-4.7": true,
       "grok-4.6": true,
@@ -288,7 +320,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     models: XAI_MODELS,
     // grok-4.7-build-fast arrives only through OAuth discovery: xAI's Grok 4.7 Fast, "the same model
     // served on faster infrastructure" (docs.x.ai/developers/grok-4-7). Probed 2026-09-30
-    // (devlog/_plan/260930_grok47_build_unify/010_probe-evidence.md): identical effort ladder, image
+    // (devlog/_fin/260930_grok47_build_unify/010_probe-evidence.md): identical effort ladder, image
     // input, 500k limit and advertised defaults, 1.5-1.7x faster, ~2x the ticks per output token. It is
     // not a second model row: shouldExposeProviderModel hides it, and grok-4.7's Fast selection on OAuth
     // serializes it (src/providers/xai-fast-model.ts). It keeps grok-4.7's facts in the lists below so an
@@ -418,7 +450,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // documents high as the 4.6 default but no multi-agent default, so do not invent one.
     modelReasoningEfforts: {
       // 2026-09-23 live probe accepted low..xhigh and rejected max on both wires;
-      // devlog/_plan/260923_grok47_parity/010_probe-evidence.md.
+      // devlog/_fin/260923_grok47_parity/010_probe-evidence.md.
       "grok-4.7": ["low", "medium", "high", "xhigh"],
       "grok-4.7-build-fast": ["low", "medium", "high", "xhigh"],
       "grok-4.6": ["low", "medium", "high", "xhigh"],
@@ -428,7 +460,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     modelDefaultReasoningEfforts: { "grok-4.7": "high", "grok-4.7-build-fast": "high", "grok-4.6": "high" },
     modelContextWindows: {
       // 500k confirmed by context_length_exceeded:
-      // devlog/_plan/260923_grok47_parity/010_probe-evidence.md.
+      // devlog/_fin/260923_grok47_parity/010_probe-evidence.md.
       "grok-4.7": 500_000,
       "grok-4.7-build-fast": 500_000,
       "grok-4.6": 500_000,
@@ -490,35 +522,8 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     modelReasoningEfforts: ORCAROUTER_MODEL_REASONING_EFFORTS,
     note: "Connect your OrcaRouter account with OAuth 2.0 + PKCE; the issued API key is stored in OpenCodex's existing credential store.",
   },
-  {
-    id: "anthropic",
-    label: "Anthropic Claude",
-    adapter: "anthropic",
-    baseUrl: "https://api.anthropic.com",
-    authKind: "oauth",
-    allowBaseUrlOverride: true,
-    featured: true,
-    oauthId: "anthropic",
-    jawcodeBundle: "anthropic",
-    note: "Log in with your Claude account",
-    models: [...ANTHROPIC_MODELS],
-    modelContextWindows: { ...ANTHROPIC_MODEL_CONTEXT_WINDOWS },
-    modelInputModalities: { ...ANTHROPIC_MODEL_INPUT_MODALITIES },
-    modelReasoningEfforts: { ...ANTHROPIC_MODEL_REASONING_EFFORTS },
-    // Codex omits max_output_tokens; without a provider budget the Anthropic adapter
-    // falls back to 8192, which truncates long answers with stop_reason=max_tokens.
-    defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
-    modelMaxOutputTokens: { ...ANTHROPIC_MODEL_MAX_OUTPUT_TOKENS },
-    defaultModel: "claude-sonnet-5",
-    // Claude fast mode on the subscription lane (Claude Code `/fast`): the OAuth route accepts
-    // `speed` and gates it on account entitlement (usage credits / org enablement), probed live
-    // 2026-09-23 (devlog/_plan/260923_anthropic_fast_speed/020_probe-evidence.md).
-    // Off until the operator opts in: fast mode draws usage credits at 2x price.
-    fastWire: ANTHROPIC_FAST_WIRE,
-    modelSupportsServiceTier: { ...ANTHROPIC_FAST_MODELS },
-    fastTierDescription: ANTHROPIC_FAST_TIER_DESCRIPTION,
-    fastOptIn: true,
-  },
+  anthropicOAuthEntry("anthropic", "Anthropic Claude"),
+  anthropicOAuthEntry("anthropic2", "Anthropic · Pool 2"),
   {
     id: "anthropic-apikey",
     label: "Anthropic (API key)",

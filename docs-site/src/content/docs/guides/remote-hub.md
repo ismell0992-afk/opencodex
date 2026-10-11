@@ -557,7 +557,7 @@ input checks.
 opencodex does not publish an official container image. The repository does maintain a source-build
 [`Dockerfile`](https://github.com/lidge-jun/opencodex/blob/main/Dockerfile),
 [`compose.yaml`](https://github.com/lidge-jun/opencodex/blob/main/compose.yaml), and a narrow
-`.dockerignore`. The build pins the multi-platform Bun 1.4.0 image index by digest, runs the proxy as
+`.dockerignore`. The build pins the multi-platform Bun 1.4.2 image index by digest, runs the proxy as
 the non-root `bun` user, keeps the root filesystem read-only, drops Linux capabilities, and publishes
 only the data listener on the host's `127.0.0.1:10100` by default. The foreground process uses
 `OCX_SERVICE=1`, so stopping or recreating the container preserves routed Codex state instead
@@ -808,4 +808,18 @@ Machine enrollment and browser authentication are separate. The pairing panel na
 
 While browser authentication is pending, the dashboard does not recommend restarting a healthy connected client. Completing pairing refreshes the dashboard data immediately, including a previously cached authentication failure. Session expiry returns to pairing; permission denial keeps its own access-settings guidance. Other failed refreshes may show the last received data with a stale-data notice and retry action.
 
+If the code was exchanged but Remote Link validation is temporarily unavailable, keep the page open and use **Retry validation**. This checks the pending browser session without spending another pairing code. Cloudflare challenge responses also keep the session pending for retry. Pairing exchange and validation requests each time out after 10 seconds, including reading the response body, so the form becomes usable again. A validation timeout keeps the installed session pending for **Retry validation**; an exchange response arriving after its timeout cannot install credentials. If the hub definitively rejects the session with HTTP 401 or 403, the dashboard restores the previous browser session only while the handoff still owns the current session state and no newer login, logout, or target change has superseded it; ask the hub operator for a fresh code for this browser origin. A pairing exchange captures the current session and target revision before sending the code; delayed responses cannot replace a session after that revision changes. Automatic discovery bootstrap and background recovery follow the same rule, including switching targets away and back; neither overrides logout. Pending and completed logout suppress automatic recovery until a new explicit login or target change. A recovery timeout reports an unavailable session only if its request is still current, uncancelled, and without credentials; late bootstrap results are discarded.
+
 If an auxiliary listener cannot bind, startup names `unauthenticatedLoopbackListener` or `hub.managementIngress` and the actual address. Correct that listener or free its address; changing only the public proxy port does not repair a fixed auxiliary port. Malformed hand-edited listener blocks warn and remain disabled while unrelated settings are preserved.
+
+## Return a hub to standalone
+
+Run `ocx hub disable [--json]` on the hub to remove `hub`, `unauthenticatedLoopbackListener`, `runtimeRole` and `hostname` together in one validated write. Provider settings, the port and saved API keys are retained. A client or standalone configuration is refused without changes.
+
+Keys do not carry a verified enrollment origin and names are editable. To revoke client keys, first inspect IDs with `ocx access key list --json`, then explicitly select each ID:
+
+```sh
+ocx hub disable --revoke-clients --client-key <client-key-id> --json
+```
+
+Repeat `--client-key` for several clients. With saved keys present, `--revoke-clients` without selected IDs refuses before changing settings. Unknown IDs also refuse. Only selected keys and their pending rotations are removed; output contains safe metadata rather than secrets. The command prints the restart step for the detected supervisor; it does not restart the proxy. Review `tailscale serve status` and other external frontends for mappings to old hub ports. Persisted settings and revocation apply to the running proxy after restart; Remote Link records and tunnels remain unchanged.

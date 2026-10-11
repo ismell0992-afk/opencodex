@@ -67,7 +67,7 @@ to the Grok CLI gateway even if its saved base URL differs; custom provider IDs 
 default. API-key requests, translated Chat/Anthropic defaults and other Grok models retain their
 existing wire and tier policy. The OAuth lane is service-tier classified per model
 (`modelSupportsServiceTier` on the registry entry, live-probed 2026-09-13 and 2026-09-23;
-`devlog/_plan/260923_grok47_parity/010_probe-evidence.md` records 4.7): grok-4.7, grok-4.6, grok-4.5,
+`devlog/_fin/260923_grok47_parity/010_probe-evidence.md` records 4.7): grok-4.7, grok-4.6, grok-4.5,
 grok-4.3, grok-4.20-0309-reasoning, grok-4.20-0309-non-reasoning, grok-build-0.1 and
 grok-composer-2.5-fast accept `service_tier: "priority"` over Grok OAuth and echo it, so those
 routes resolve Fast-eligible, publish `--fast` rows, and forward a caller-sent tier on either wire (`chatServiceTier: true`) — except OAuth grok-4.7, whose Fast serializes `grok-4.7-build-fast` with no tier ([xAI Grok](../providers/xai-grok.md#oauth-fast-tier-priority-processing)).
@@ -208,10 +208,10 @@ uses the original routed provider while the generated hash uses the settled adap
 Anthropic hard pin cannot make the canonical Go destination disappear from transport recognition.
 An operator-supplied header wins case-insensitively. Renamed providers are covered only when their
 fixed key-auth destination still matches the registry; custom and lookalike URLs receive nothing.
-OpenCode Go's exact `union-alpha` model id is hard-pinned to the Anthropic wire from every inbound
-surface; sibling models retain their existing Chat or Responses selection. This wire choice and the
-session namespace do not assert upstream availability after the Messages endpoint accepts the
-session header.
+OpenCode Go's exact `claude-haiku-5-5`, `minimax-m2.5`, `minimax-m2.7`, `minimax-m3`, and `union-alpha`
+model ids are hard-pinned to Anthropic from every inbound; Haiku uses Messages in Go's [endpoint table](https://opencode.ai/docs/go/#endpoints).
+Sibling models retain their Chat or Responses selection. This wire choice and the session namespace
+do not assert upstream availability after the Messages endpoint accepts the session header.
 `src/adapters/openai-responses/web-search.ts` also drops the provider-rejected
 `search_content_types` and `indexed_web_access` fields from plain `web_search` tools while
 preserving preview tools. The two OpenCode Zen destinations gate that on a Contributor Muse id
@@ -315,12 +315,12 @@ an empty tool list is making a statement rather than omitting one, which is how 
 guard reads it through `clientExplicitWireToolCatalog` in
 `src/server/responses/passthrough-dispatch.ts`.
 
-The passthrough guard is not wire-scoped. `undeclaredToolGuardActive` gates namespace normalization
-and continuation-state suppression as well as the refusal, and it stands down only for
-`authMode: "forward"` and for a request that declares no catalog at all.
+The passthrough SSE/JSON refusal is wire-scoped too: only `responses` rejects undeclared calls.
+`undeclaredToolGuardActive` still gates namespace normalization and continuation suppression on every wire,
+standing down only for `authMode: "forward"` and requests with no catalog; relayed undeclared calls are not remembered.
 
-`src/server/responses/run-turn-execution.ts` and `src/server/responses/adapter-delivery.ts` set the
-flag from `inboundWire` on the streaming, buffered, and JSON paths alike, so the three cannot drift.
+`src/server/responses/run-turn-execution.ts`, `src/server/responses/adapter-delivery.ts`, and
+`src/server/responses/passthrough-delivery.ts` scope membership refusal from `inboundWire` for SSE and JSON alike.
 
 ## Selection outlives the declaration check
 
@@ -390,20 +390,20 @@ Native passthrough SSE has TWO shapes, selected per request in
   `response.completed` closes the client stream even if upstream keeps HTTP/SSE
   alive. Darwin uses it for no-client-rewrite traffic only (neither image-gen
   aliases nor item-id repair) and is explicit-only: `auto` stays tee even after
-  a future threshold bump. One eager reader + byte-bounded
-  client queue + post-cancel bounded discard-drain replaces the tee and goes
-  directly to the response without a JS rewrite wrapper, preserving the full
-  inspection side-effect set (shared `createSseInspector` factory in `relay.ts`)
+  a future threshold bump. One eager reader, a byte-bounded client queue and a bounded post-cancel
+  discard-drain replace the tee without an additional JS rewrite wrapper. Producer teardown removes
+  both upstream abort listeners, so a live controller cannot retain its completed native reader.
+  The shared `createSseInspector` factory in `relay.ts` retains the complete inspection side effects,
   including the #44 late-terminal semantics.
 
-Both client readers retain a bounded, redacted message and the first structured refusal code from a bare upstream `error`.
+Both client readers retain a bounded, redacted message and the first structured refusal code from a bare upstream `error`. EOF synthesis also retains narrowly recognized rate-limit codes (`rate_limit_exceeded`, `rate_limit_error`) and overload codes (`server_is_overloaded`, `overloaded_error`); recognized types apply only without an explicit code.
 At EOF without a real terminal they synthesize `response.failed` rather than `adapter_eof`; a code without a message still
 produces a terminal. Codex retries codes outside its fatal set, so code and message follow the same candidate precedence;
 recognized refusal copy is used only when the event has no code. A read failure after refusal reports that refusal (#5176).
 The shared outbound rewrite masks diagnostics on real failed and incomplete terminals before SSE or buffered JSON delivery,
 while preserving status and output; failed turns are not retained as continuation state. Buffered JSON masks selected credentials in synthetic bare-error fields before log inspection or client formatting; request logs keep transport status.
 The delivering reader owns refusal evidence before EOF; asynchronous tee inspection cannot reliably supply it.
-Inspection still applies the bare-error rule at EOF for account health. Real terminals and caller cancellation take precedence.
+Inspection still applies the bare-error rule at EOF for account health. Real terminals and caller cancellation take precedence. Unknown codes retain `upstream_error` / `upstream_server_error`; refusal precedence is unchanged and classification adds no replay or retry. Bare-error log status is provisional until a genuine terminal supersedes it through `src/server/request-log-terminal-status.ts`.
 Native recovery preflight keeps the rejected body reader and bounded prefix for normal mid-stream failure, without decrypt retry.
 
 Native Responses may rebuild once when encrypted function/custom-tool output or

@@ -131,14 +131,20 @@ Missing or unreadable evidence blocks the guarded stop.
 
 When this CLI is newer than an attested standalone POSIX proxy, restart can stop the old
 installation and launch this one. This guarded update requires an unclaimed physical home,
-a detached proxy whose parent is PID 1, no installed or active service, and a known CLI version.
+a detached proxy whose parent is PID 1, positively inactive service supervision, and a known CLI
+version. An installed but unloaded launchd or inactive systemd service record is eligible only
+when it carries no ownership claim. Both launchd domains must be absent; systemd must report
+inactive with MainPID zero. Unreadable or uncertain manager evidence refuses. The command freezes
+all service records and the platform definition and checks them through stop, launch and child
+publication. Any rewrite, replacement, permission change or record creation/deletion refuses;
+retry after inspecting `ocx status`.
 The stop uses the same connection that proved the old proxy's identity. The command launches
 once only after confirmed shutdown, then requires the exact child PID, endpoint, fresh identity
 proof and matching version. Missing version, uncertain stop, timeout or an unexpected replacement
 reports failure without another stop or start. If the runtime this CLI would launch is still the
 small placeholder an in-place npm install leaves before its postinstall, restart refuses before
 stopping anything; after a confirmed stop it waits for the runtime within the same deadline and
-launches nothing if it does not arrive. Windows, foreground, desktop-supervised, service,
+launches nothing if it does not arrive. Windows, foreground, desktop-supervised, active-service,
 connected-client and sibling runtimes do not use this update path; use their owning lifecycle
 controls. A newer proxy or incomparable version still refuses an in-place downgrade. Use the newer
 installation's `ocx` to restart; inspect `which -a ocx` and `ocx status` to identify it.
@@ -827,6 +833,9 @@ that PID now. Wait for the operation to finish and retry; do not delete the lock
 process based only on this PID. A later mutation attempt can reclaim a stale lease once its
 age exceeds 30 seconds and the recorded PID is no longer alive; status only inspects it.
 
+On Windows, this shared Node/Bun diagnostic does not launch an executable to look up the
+image name; the recorded PID, liveness, lease age and recovery guidance remain available.
+
 ### `ocx codex-shim <install|status|uninstall|remove>`
 
 On macOS and Linux, install a private autostart wrapper at `<OPENCODEX_HOME>/bin/codex` and a
@@ -1096,3 +1105,9 @@ Use `ocx connect <url> --pairing-code-stdin`, `ocx connect status`, `ocx sync`, 
 ## Setup port validation
 
 `ocx init` accepts TCP ports 1–65535 as decimal whole numbers. Press Enter to use 10100. Invalid input such as `0`, `10100oops` or `1.5` is never silently replaced or truncated; setup reports it and asks for the port again.
+
+## Login registration diagnostics
+
+On Linux, `ocx service install` checks `loginctl show-user <current-user> -p Linger` before printing boot advice. Enabled linger is reported as already enabled. Disabled linger gets the `loginctl enable-linger $USER` hint; missing or unreadable diagnostics state the uncertainty and do not fail installation.
+
+On macOS, `ocx service status` distinguishes a loaded Desktop login item from a valid enabled registration awaiting the next login. `ocx status` credits the latter in restart safety when the same Desktop app currently supervises the proxy. An incorrect plist label or command, a disabled entry, an unverified load probe, or changed process identity still cannot earn protection.
